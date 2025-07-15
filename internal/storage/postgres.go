@@ -35,7 +35,7 @@ func NewPostgresStore(databaseURL string) (*PostgresStore, error) {
 }
 
 func adjustDatabaseURLForEnvironment(databaseURL string) string {
-	// If we're in a Railway environment, ensure proper SSL configuration
+	// If we're in a Railway environment, disable SSL since Railway PostgreSQL doesn't support it
 	if os.Getenv("RAILWAY_ENVIRONMENT") != "" || strings.Contains(databaseURL, "railway.app") {
 		// Parse the URL
 		parsedURL, err := url.Parse(databaseURL)
@@ -46,8 +46,8 @@ func adjustDatabaseURLForEnvironment(databaseURL string) string {
 		// Get existing query parameters
 		values := parsedURL.Query()
 
-		// Set SSL mode to require (try SSL, fallback to non-SSL)
-		values.Set("sslmode", "require")
+		// Set SSL mode to disable for Railway
+		values.Set("sslmode", "disable")
 
 		// Update the URL with new parameters
 		parsedURL.RawQuery = values.Encode()

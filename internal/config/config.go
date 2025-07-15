@@ -19,33 +19,25 @@ type Config struct {
 }
 
 func Load() *Config {
-	// Determine default database URL based on environment
-	var defaultDatabaseURL string
-	env := getEnvOrDefault("ENVIRONMENT", "development")
-
-	if env == "production" {
-		// For production environments like Railway, try SSL first, fall back to disable if needed
-		defaultDatabaseURL = "postgres://localhost/knowthis?sslmode=require"
-	} else {
-		// For development, disable SSL by default
-		defaultDatabaseURL = "postgres://localhost/knowthis?sslmode=disable"
-	}
-
 	return &Config{
-		Port:              getEnvOrDefault("PORT", "8080"),
-		DatabaseURL:       getEnvOrDefault("DATABASE_URL", defaultDatabaseURL),
+		Port:              os.Getenv("PORT"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		SlackBotToken:     os.Getenv("SLACK_BOT_TOKEN"),
 		SlackAppToken:     os.Getenv("SLACK_APP_TOKEN"),
 		SlabWebhookSecret: os.Getenv("SLAB_WEBHOOK_SECRET"),
 		OpenAIAPIKey:      os.Getenv("OPENAI_API_KEY"),
-		LogLevel:          getEnvOrDefault("LOG_LEVEL", "INFO"),
-		LogFormat:         getEnvOrDefault("LOG_FORMAT", "text"),
-		Environment:       env,
+		LogLevel:          os.Getenv("LOG_LEVEL"),
+		LogFormat:         os.Getenv("LOG_FORMAT"),
+		Environment:       os.Getenv("ENVIRONMENT"),
 	}
 }
 
 func (c *Config) Validate() error {
 	var errors []string
+
+	if c.Port == "" {
+		errors = append(errors, "PORT is required")
+	}
 
 	if c.SlackBotToken == "" {
 		errors = append(errors, "SLACK_BOT_TOKEN is required")
@@ -63,6 +55,18 @@ func (c *Config) Validate() error {
 		errors = append(errors, "DATABASE_URL is required")
 	}
 
+	if c.LogLevel == "" {
+		errors = append(errors, "LOG_LEVEL is required")
+	}
+
+	if c.LogFormat == "" {
+		errors = append(errors, "LOG_FORMAT is required")
+	}
+
+	if c.Environment == "" {
+		errors = append(errors, "ENVIRONMENT is required")
+	}
+
 	// Optional validations
 	if c.SlackBotToken != "" && !strings.HasPrefix(c.SlackBotToken, "xoxb-") {
 		errors = append(errors, "SLACK_BOT_TOKEN must start with 'xoxb-'")
@@ -72,14 +76,18 @@ func (c *Config) Validate() error {
 		errors = append(errors, "SLACK_APP_TOKEN must start with 'xapp-'")
 	}
 
-	validLogLevels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
-	if !contains(validLogLevels, strings.ToUpper(c.LogLevel)) {
-		errors = append(errors, "LOG_LEVEL must be one of: DEBUG, INFO, WARN, ERROR")
+	if c.LogLevel != "" {
+		validLogLevels := []string{"DEBUG", "INFO", "WARN", "ERROR"}
+		if !contains(validLogLevels, strings.ToUpper(c.LogLevel)) {
+			errors = append(errors, "LOG_LEVEL must be one of: DEBUG, INFO, WARN, ERROR")
+		}
 	}
 
-	validLogFormats := []string{"text", "json"}
-	if !contains(validLogFormats, strings.ToLower(c.LogFormat)) {
-		errors = append(errors, "LOG_FORMAT must be one of: text, json")
+	if c.LogFormat != "" {
+		validLogFormats := []string{"text", "json"}
+		if !contains(validLogFormats, strings.ToLower(c.LogFormat)) {
+			errors = append(errors, "LOG_FORMAT must be one of: text, json")
+		}
 	}
 
 	if len(errors) > 0 {
