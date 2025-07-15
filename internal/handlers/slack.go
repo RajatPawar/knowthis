@@ -11,6 +11,7 @@ import (
 	"knowthis/internal/storage"
 
 	"github.com/slack-go/slack"
+	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/socketmode"
 )
 
@@ -44,36 +45,41 @@ func (h *SlackHandler) Start() error {
 func (h *SlackHandler) handleEvents() {
 	for evt := range h.socketMode.Events {
 		switch evt.Type {
-		case "events_api":
+		case socketmode.EventTypeEventsAPI:
 			// Handle events API
-			if evt.Request != nil {
-				h.socketMode.Ack(*evt.Request)
+			eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
+			if !ok {
+				log.Printf("Ignored %+v\n", evt)
+				continue
 			}
 			
-			// Process event data
-			if eventData, ok := evt.Data.(map[string]interface{}); ok {
-				if innerEvent, ok := eventData["event"].(map[string]interface{}); ok {
-					if eventType, ok := innerEvent["type"].(string); ok && eventType == "app_mention" {
-						h.handleAppMentionFromMap(innerEvent)
-					}
+			log.Printf("Event received: %+v\n", eventsAPIEvent)
+			h.socketMode.Ack(*evt.Request)
+			
+			switch eventsAPIEvent.Type {
+			case slackevents.CallbackEvent:
+				innerEvent := eventsAPIEvent.InnerEvent
+				switch ev := innerEvent.Data.(type) {
+				case *slackevents.AppMentionEvent:
+					h.handleAppMention(ev)
 				}
 			}
 		}
 	}
 }
 
-func (h *SlackHandler) handleAppMentionFromMap(data map[string]interface{}) {
-	// Extract mention data from map
+func (h *SlackHandler) handleAppMention(ev *slackevents.AppMentionEvent) {
+	log.Printf("App mention received: %+v\n", ev)
+	
 	mention := &AppMentionEvent{
-		Type:            getString(data, "type"),
-		User:            getString(data, "user"),
-		Text:            getString(data, "text"),
-		Timestamp:       getString(data, "ts"),
-		Channel:         getString(data, "channel"),
-		ThreadTimeStamp: getString(data, "thread_ts"),
+		Type:            ev.Type,
+		User:            ev.User,
+		Text:            ev.Text,
+		Timestamp:       ev.TimeStamp,
+		Channel:         ev.Channel,
+		ThreadTimeStamp: ev.ThreadTimeStamp,
 	}
 
-	// Quick ACK
 	go h.processAppMention(mention)
 }
 
@@ -87,12 +93,6 @@ type AppMentionEvent struct {
 	ThreadTimeStamp string
 }
 
-func getString(data map[string]interface{}, key string) string {
-	if val, ok := data[key].(string); ok {
-		return val
-	}
-	return ""
-}
 
 func (h *SlackHandler) processAppMention(mention *AppMentionEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
