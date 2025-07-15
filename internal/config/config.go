@@ -1,7 +1,7 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -71,7 +71,7 @@ func (c *Config) Validate() error {
 	}
 
 	if len(errors) > 0 {
-		return errors[0:1][0] // Return first error as an error
+		return fmt.Errorf("%s", errors[0])
 	}
 
 	return nil

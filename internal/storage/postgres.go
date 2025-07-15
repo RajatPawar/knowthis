@@ -5,9 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
-	"time"
 
-	"github.com/lib/pq"
 	"github.com/pgvector/pgvector-go"
 	_ "github.com/lib/pq"
 )

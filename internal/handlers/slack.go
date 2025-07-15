@@ -23,7 +23,7 @@ type SlackHandler struct {
 
 func NewSlackHandler(botToken, appToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
 	client := slack.New(botToken)
-	socketMode := socketmode.New(client, socketmode.OptionAppToken(appToken))
+	socketMode := socketmode.New(client)
 	
 	return &SlackHandler{
 		client:     client,
@@ -41,42 +41,57 @@ func (h *SlackHandler) Start() error {
 func (h *SlackHandler) handleEvents() {
 	for evt := range h.socketMode.Events {
 		switch evt.Type {
-		case socketmode.EventTypeEventsAPI:
-			eventsAPIEvent, ok := evt.Data.(socketmode.EventsAPIEvent)
-			if !ok {
-				log.Printf("Ignored %+v\n", evt)
-				continue
+		case "events_api":
+			// Handle events API
+			if evt.Request != nil {
+				h.socketMode.Ack(*evt.Request)
 			}
 			
-			h.socketMode.Ack(*evt.Request)
-			
-			switch eventsAPIEvent.Type {
-			case socketmode.EventTypeEventsAPI:
-				h.handleEventsAPI(eventsAPIEvent)
+			// Process event data
+			if eventData, ok := evt.Data.(map[string]interface{}); ok {
+				if innerEvent, ok := eventData["event"].(map[string]interface{}); ok {
+					if eventType, ok := innerEvent["type"].(string); ok && eventType == "app_mention" {
+						h.handleAppMentionFromMap(innerEvent)
+					}
+				}
 			}
 		}
 	}
 }
 
-func (h *SlackHandler) handleEventsAPI(event socketmode.EventsAPIEvent) {
-	switch event.InnerEvent.Type {
-	case "app_mention":
-		h.handleAppMention(event.InnerEvent.Data)
-	}
-}
-
-func (h *SlackHandler) handleAppMention(data interface{}) {
-	mention, ok := data.(*slack.AppMentionEvent)
-	if !ok {
-		log.Printf("Could not cast event data to AppMentionEvent: %v", data)
-		return
+func (h *SlackHandler) handleAppMentionFromMap(data map[string]interface{}) {
+	// Extract mention data from map
+	mention := &AppMentionEvent{
+		Type:            getString(data, "type"),
+		User:            getString(data, "user"),
+		Text:            getString(data, "text"),
+		Timestamp:       getString(data, "ts"),
+		Channel:         getString(data, "channel"),
+		ThreadTimeStamp: getString(data, "thread_ts"),
 	}
 
 	// Quick ACK
 	go h.processAppMention(mention)
 }
 
-func (h *SlackHandler) processAppMention(mention *slack.AppMentionEvent) {
+// Helper struct for app mention event
+type AppMentionEvent struct {
+	Type            string
+	User            string
+	Text            string
+	Timestamp       string
+	Channel         string
+	ThreadTimeStamp string
+}
+
+func getString(data map[string]interface{}, key string) string {
+	if val, ok := data[key].(string); ok {
+		return val
+	}
+	return ""
+}
+
+func (h *SlackHandler) processAppMention(mention *AppMentionEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

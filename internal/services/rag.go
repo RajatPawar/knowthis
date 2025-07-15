@@ -116,7 +116,7 @@ func (r *RAGService) callOpenAIAPI(ctx context.Context, systemPrompt, userPrompt
 	defer cancel()
 
 	resp, err := r.openaiClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-		Model:     openai.GPT4oMini,
+		Model:     "gpt-4o-mini",
 		MaxTokens: 1000,
 		Messages: []openai.ChatCompletionMessage{
 			{

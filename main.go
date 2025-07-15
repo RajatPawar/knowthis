@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -24,7 +23,7 @@ import (
 
 func main() {
 	// Setup structured logging
-	logger := logging.SetupLogger()
+	logging.SetupLogger()
 	
 	cfg := config.Load()
 	if err := cfg.Validate(); err != nil {

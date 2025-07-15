@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+CLAUDE.md
+START.md
+docs/
+deployments/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build artifacts
+knowthis
+dist/
+build/
+*.test
+*.out
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Test coverage
+coverage.out
+
+# Node modules (if any)
+node_modules/
