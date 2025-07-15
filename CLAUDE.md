@@ -13,13 +13,12 @@ KnowThis is a Go-based internal knowledge & search MVP bot that integrates with 
 - **Slab Integration**: Webhook endpoint with HMAC verification
 - **Storage Layer**: PostgreSQL with pgvector for embeddings
 - **Embeddings**: OpenAI text-embedding-3-small
-- **RAG Service**: Vector similarity search + Claude API for responses
+- **RAG Service**: Vector similarity search + OpenAI GPT-4o Mini for responses
 
 ### Key Technologies
 - Go 1.22
 - PostgreSQL with pgvector extension
-- OpenAI API for embeddings
-- Anthropic Claude API for RAG responses
+- OpenAI API for embeddings and chat completions
 - Slack Socket Mode API
 - Slab Webhook API
 
@@ -60,8 +59,7 @@ Required environment variables:
 - `SLACK_BOT_TOKEN`: Slack bot token (xoxb-)
 - `SLACK_APP_TOKEN`: Slack app token (xapp-)
 - `SLAB_WEBHOOK_SECRET`: Secret for HMAC verification
-- `OPENAI_API_KEY`: OpenAI API key for embeddings
-- `ANTHROPIC_API_KEY`: Anthropic API key for RAG
+- `OPENAI_API_KEY`: OpenAI API key for embeddings and chat completions
 - `DATABASE_URL`: PostgreSQL connection string (defaults to localhost)
 - `PORT`: HTTP server port (defaults to 8080)
 
@@ -138,11 +136,12 @@ Required OAuth scopes:
 - Vector similarity search with cosine distance
 - Relevance threshold filtering (>0.7 similarity)
 - Context building from top relevant documents
+- OpenAI GPT-4o Mini for response generation
 
 ## Production Features
 
 ✅ **Completed:**
-- Anthropic Claude API integration with proper error handling
+- OpenAI GPT-4o Mini integration with proper error handling
 - Structured logging with slog (JSON/text formats)
 - Prometheus metrics and monitoring
 - Rate limiting for API and webhook endpoints

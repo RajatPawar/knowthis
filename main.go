@@ -44,7 +44,7 @@ func main() {
 
 	// Initialize services
 	embeddingService := services.NewEmbeddingService(cfg.OpenAIAPIKey)
-	ragService := services.NewRAGService(cfg.AnthropicAPIKey, store, embeddingService)
+	ragService := services.NewRAGService(cfg.OpenAIAPIKey, store, embeddingService)
 	
 	// Initialize background jobs
 	embeddingProcessor := jobs.NewEmbeddingProcessor(store, embeddingService)

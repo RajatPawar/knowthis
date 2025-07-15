@@ -16,7 +16,6 @@ services:
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
       - SLAB_WEBHOOK_SECRET=${SLAB_WEBHOOK_SECRET}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy

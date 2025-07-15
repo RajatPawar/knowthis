@@ -13,7 +13,6 @@ type Config struct {
 	SlackAppToken      string
 	SlabWebhookSecret  string
 	OpenAIAPIKey       string
-	AnthropicAPIKey    string
 	LogLevel           string
 	LogFormat          string
 	Environment        string
@@ -27,7 +26,6 @@ func Load() *Config {
 		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
 		SlabWebhookSecret:  os.Getenv("SLAB_WEBHOOK_SECRET"),
 		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
-		AnthropicAPIKey:    os.Getenv("ANTHROPIC_API_KEY"),
 		LogLevel:           getEnvOrDefault("LOG_LEVEL", "INFO"),
 		LogFormat:          getEnvOrDefault("LOG_FORMAT", "text"),
 		Environment:        getEnvOrDefault("ENVIRONMENT", "development"),
@@ -47,10 +45,6 @@ func (c *Config) Validate() error {
 
 	if c.OpenAIAPIKey == "" {
 		errors = append(errors, "OPENAI_API_KEY is required")
-	}
-
-	if c.AnthropicAPIKey == "" {
-		errors = append(errors, "ANTHROPIC_API_KEY is required")
 	}
 
 	if c.DatabaseURL == "" {

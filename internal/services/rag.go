@@ -9,12 +9,11 @@ import (
 
 	"knowthis/internal/storage"
 	
-	"github.com/anthropic-ai/anthropic-sdk-go"
-	"github.com/anthropic-ai/anthropic-sdk-go/option"
+	"github.com/sashabaranov/go-openai"
 )
 
 type RAGService struct {
-	anthropicClient  *anthropic.Client
+	openaiClient     *openai.Client
 	store            storage.Store
 	embeddingService *EmbeddingService
 }
@@ -25,13 +24,11 @@ type QueryResult struct {
 	Query     string                `json:"query"`
 }
 
-func NewRAGService(anthropicAPIKey string, store storage.Store, embeddingService *EmbeddingService) *RAGService {
-	client := anthropic.NewClient(
-		option.WithAPIKey(anthropicAPIKey),
-	)
+func NewRAGService(openaiAPIKey string, store storage.Store, embeddingService *EmbeddingService) *RAGService {
+	client := openai.NewClient(openaiAPIKey)
 	
 	return &RAGService{
-		anthropicClient:  client,
+		openaiClient:     client,
 		store:            store,
 		embeddingService: embeddingService,
 	}
@@ -69,7 +66,7 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 		}, nil
 	}
 
-	// Generate answer using Claude
+	// Generate answer using OpenAI GPT
 	answer, err := r.generateAnswer(ctx, query, relevantDocs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate answer: %w", err)
@@ -101,51 +98,49 @@ func (r *RAGService) generateAnswer(ctx context.Context, query string, documents
 	
 	context := strings.Join(contextParts, "\n\n")
 	
-	// Simple prompt for now - you can enhance this with actual Anthropic API
-	prompt := fmt.Sprintf(`Based on the following context from our internal knowledge base, please answer the question. Be concise and cite relevant sources by their numbers.
+	// Create system prompt for OpenAI
+	systemPrompt := "You are a helpful assistant that answers questions based on internal company knowledge. Be concise and cite relevant sources by their numbers when possible."
+	
+	userPrompt := fmt.Sprintf(`Based on the following context from our internal knowledge base, please answer the question. Be concise and cite relevant sources by their numbers.
 
 Context:
 %s
 
-Question: %s
+Question: %s`, context, query)
 
-Answer:`, context, query)
-
-	// For now, return a simple response. In production, you'd use Anthropic's API
-	return r.callAnthropicAPI(ctx, prompt)
+	return r.callOpenAIAPI(ctx, systemPrompt, userPrompt)
 }
 
-func (r *RAGService) callAnthropicAPI(ctx context.Context, prompt string) (string, error) {
+func (r *RAGService) callOpenAIAPI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	message, err := r.anthropicClient.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.F(anthropic.ModelClaude3Haiku20240307),
-		MaxTokens: anthropic.F(int64(1000)),
-		Messages: anthropic.F([]anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
-		}),
-		System: anthropic.F("You are a helpful assistant that answers questions based on internal company knowledge. Be concise and cite sources when possible."),
+	resp, err := r.openaiClient.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model:     openai.GPT4oMini,
+		MaxTokens: 1000,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemPrompt,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userPrompt,
+			},
+		},
+		Temperature: 0.7,
 	})
 	
 	if err != nil {
-		slog.Error("Failed to call Anthropic API", "error", err)
-		return "", fmt.Errorf("failed to call Anthropic API: %w", err)
+		slog.Error("Failed to call OpenAI API", "error", err)
+		return "", fmt.Errorf("failed to call OpenAI API: %w", err)
 	}
 
-	if len(message.Content) == 0 {
+	if len(resp.Choices) == 0 {
 		return "I couldn't generate a response. Please try again.", nil
 	}
 
-	// Extract text content from the response
-	var response strings.Builder
-	for _, content := range message.Content {
-		if textBlock, ok := content.AsTextBlock(); ok {
-			response.WriteString(textBlock.Text)
-		}
-	}
-
-	return response.String(), nil
+	return resp.Choices[0].Message.Content, nil
 }
 
 func getSlabType(doc *storage.Document) string {

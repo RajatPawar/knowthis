@@ -91,35 +91,35 @@ var (
 		},
 	)
 
-	AnthropicAPICalls = promauto.NewCounterVec(
+	OpenAIChatAPICalls = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "knowthis_anthropic_api_calls_total",
-			Help: "Total number of Anthropic API calls",
+			Name: "knowthis_openai_chat_api_calls_total",
+			Help: "Total number of OpenAI Chat API calls",
 		},
 		[]string{"status"},
 	)
 
-	AnthropicAPICallDuration = promauto.NewHistogram(
+	OpenAIChatAPICallDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name: "knowthis_anthropic_api_call_duration_seconds",
-			Help: "Duration of Anthropic API calls in seconds",
+			Name: "knowthis_openai_chat_api_call_duration_seconds",
+			Help: "Duration of OpenAI Chat API calls in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
 	)
 
-	// OpenAI metrics
-	OpenAIAPICalls = promauto.NewCounterVec(
+	// OpenAI Embeddings metrics
+	OpenAIEmbeddingAPICalls = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "knowthis_openai_api_calls_total",
-			Help: "Total number of OpenAI API calls",
+			Name: "knowthis_openai_embedding_api_calls_total",
+			Help: "Total number of OpenAI Embedding API calls",
 		},
 		[]string{"status"},
 	)
 
-	OpenAIAPICallDuration = promauto.NewHistogram(
+	OpenAIEmbeddingAPICallDuration = promauto.NewHistogram(
 		prometheus.HistogramOpts{
-			Name: "knowthis_openai_api_call_duration_seconds",
-			Help: "Duration of OpenAI API calls in seconds",
+			Name: "knowthis_openai_embedding_api_call_duration_seconds",
+			Help: "Duration of OpenAI Embedding API calls in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
 	)

@@ -10,7 +10,6 @@ Complete step-by-step guide to deploy your KnowThis knowledge bot to production.
 - Supabase account
 - Slack workspace admin access
 - OpenAI API key
-- Anthropic API key
 
 ---
 
@@ -106,13 +105,9 @@ postgresql://postgres:[YOUR-PASSWORD]@db.abcdefghijklmnop.supabase.co:5432/postg
 5. Name it "KnowThis Bot"
 6. **Copy the API key** - save it!
 
-### 3.2 Anthropic API Key
-1. Go to [console.anthropic.com](https://console.anthropic.com)
-2. Sign in to your account
-3. Go to "API Keys"
-4. Click "Create Key"
-5. Name it "KnowThis Bot"
-6. **Copy the API key** - save it!
+**Note**: This single OpenAI API key will be used for both:
+- **Embeddings**: Converting text to vectors for semantic search
+- **Chat Completions**: Generating intelligent responses using GPT-4o Mini
 
 ---
 
@@ -151,9 +146,8 @@ railway variables set DATABASE_URL="postgresql://postgres:[YOUR-PASSWORD]@db.abc
 railway variables set SLACK_BOT_TOKEN="xoxb-your-bot-token"
 railway variables set SLACK_APP_TOKEN="xapp-your-app-token"
 
-# API keys
+# OpenAI API key (used for both embeddings and chat completions)
 railway variables set OPENAI_API_KEY="sk-your-openai-key"
-railway variables set ANTHROPIC_API_KEY="sk-ant-your-anthropic-key"
 
 # Optional: Slab webhook secret (if using Slab)
 railway variables set SLAB_WEBHOOK_SECRET="your-webhook-secret"
@@ -240,10 +234,10 @@ railway logs
 - ✅ Listens for @mentions in Slack
 - ✅ Captures conversation context (threads or last 15 messages)
 - ✅ Stores messages with deduplication
-- ✅ Generates embeddings for semantic search
+- ✅ Generates embeddings for semantic search using OpenAI
 - ✅ Processes Slab posts and comments (if configured)
 - ✅ Answers questions via `/api/query` endpoint
-- ✅ Uses Claude AI for intelligent responses
+- ✅ Uses OpenAI GPT-4o Mini for intelligent responses
 
 ### Usage:
 1. **Slack**: Mention `@KnowThis Bot` in any channel
@@ -257,10 +251,9 @@ railway logs
 ### Monthly costs (estimates):
 - **Railway**: $5/month (Starter plan)
 - **Supabase**: $0/month (Free tier, up to 500MB)
-- **OpenAI**: ~$5-20/month (depends on usage)
-- **Anthropic**: ~$5-20/month (depends on usage)
+- **OpenAI**: ~$10-30/month (embeddings + chat completions, depends on usage)
 
-**Total**: ~$15-45/month for full production setup
+**Total**: ~$15-35/month for full production setup
 
 ---
 
@@ -282,11 +275,7 @@ railway logs
 - Check OPENAI_API_KEY format
 - Verify API key has sufficient credits
 - Check OpenAI API status
-
-**4. "Anthropic API error"**
-- Check ANTHROPIC_API_KEY format
-- Verify API key is active
-- Check Anthropic API status
+- Ensure you have access to GPT-4o Mini model
 
 ### Getting Help:
 - Check Railway logs: `railway logs`
@@ -301,7 +290,7 @@ railway logs
 2. **Monitor costs** via API dashboards
 3. **Scale up** Railway plan if needed
 4. **Add team members** to Slack workspace
-5. **Customize responses** by modifying the prompt in `internal/services/rag.go`
+5. **Customize responses** by modifying the system prompt in `internal/services/rag.go`
 
 ---
 
@@ -310,7 +299,7 @@ railway logs
 ### When to scale:
 - **Railway**: Move to Pro plan ($20/month) for more resources
 - **Supabase**: Move to Pro plan ($25/month) for more database storage
-- **API Usage**: Monitor costs and set up billing alerts
+- **OpenAI Usage**: Monitor costs and set up billing alerts (both embeddings and chat completions)
 
 ### Performance optimization:
 - Monitor `/metrics` endpoint for bottlenecks

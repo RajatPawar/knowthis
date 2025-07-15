@@ -23,7 +23,7 @@ A Go-based bot that integrates with Slack and Slab to capture, store, and retrie
 ### RAG (Retrieval-Augmented Generation)
 - **OpenAI Embeddings**: text-embedding-3-small for document encoding
 - **Vector Search**: Cosine similarity for relevant content retrieval
-- **Claude Integration**: Anthropic Claude for generating responses
+- **OpenAI Chat**: GPT-4o Mini for generating intelligent responses
 
 ## Quick Start
 
@@ -31,7 +31,6 @@ A Go-based bot that integrates with Slack and Slab to capture, store, and retrie
 - Go 1.22+
 - PostgreSQL with pgvector extension
 - OpenAI API key
-- Anthropic API key
 - Slack app tokens
 - Slab webhook secret
 
@@ -57,7 +56,6 @@ export SLACK_BOT_TOKEN="xoxb-your-token"
 export SLACK_APP_TOKEN="xapp-your-token"
 export SLAB_WEBHOOK_SECRET="your-webhook-secret"
 export OPENAI_API_KEY="your-openai-key"
-export ANTHROPIC_API_KEY="your-anthropic-key"
 export DATABASE_URL="postgres://localhost/knowthis?sslmode=disable"
 export PORT="8080"
 ```
