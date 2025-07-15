@@ -103,9 +103,11 @@ func (h *SlackHandler) processAppMention(mention *AppMentionEvent) {
 	var err error
 	
 	if mention.ThreadTimeStamp != "" {
+		log.Printf("Processing thread mention - ThreadTS: %s", mention.ThreadTimeStamp)
 		// Get thread messages
 		messages, err = h.getThreadMessages(ctx, mention.Channel, mention.ThreadTimeStamp)
 	} else {
+		log.Printf("Processing channel mention - fetching last 15 messages")
 		// Get last 15 messages from channel
 		messages, err = h.getChannelMessages(ctx, mention.Channel, 15)
 	}
@@ -115,16 +117,23 @@ func (h *SlackHandler) processAppMention(mention *AppMentionEvent) {
 		return
 	}
 
+	log.Printf("Fetched %d messages from thread/channel", len(messages))
+
 	// Store messages with deduplication
-	for _, msg := range messages {
+	for i, msg := range messages {
+		textPreview := msg.Text
+		if len(textPreview) > 50 {
+			textPreview = textPreview[:50] + "..."
+		}
+		log.Printf("Storing message %d: %s", i+1, textPreview)
 		if err := h.storeMessage(ctx, msg, mention.Channel); err != nil {
 			log.Printf("Error storing message: %v", err)
 		}
 	}
 
-	// Send acknowledgment
-	if err := h.sendAcknowledgment(mention.Channel, mention.ThreadTimeStamp); err != nil {
-		log.Printf("Error sending acknowledgment: %v", err)
+	// Add checkmark reaction to acknowledge
+	if err := h.addCheckmarkReaction(mention.Channel, mention.Timestamp); err != nil {
+		log.Printf("Error adding checkmark reaction: %v", err)
 	}
 }
 
@@ -204,9 +213,11 @@ func (h *SlackHandler) cleanMessageText(text string) string {
 	return strings.TrimSpace(text)
 }
 
-func (h *SlackHandler) sendAcknowledgment(channel, threadTS string) error {
-	_, _, err := h.client.PostMessage(channel, slack.MsgOptionText("👍 Got it! I've processed and stored the messages.", false), slack.MsgOptionTS(threadTS))
-	return err
+func (h *SlackHandler) addCheckmarkReaction(channel, timestamp string) error {
+	return h.client.AddReaction("white_check_mark", slack.ItemRef{
+		Channel:   channel,
+		Timestamp: timestamp,
+	})
 }
 
 func parseSlackTimestamp(ts string) time.Time {
