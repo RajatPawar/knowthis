@@ -56,7 +56,7 @@ export SLACK_BOT_TOKEN="xoxb-your-token"
 export SLACK_APP_TOKEN="xapp-your-token"
 export SLAB_WEBHOOK_SECRET="your-webhook-secret"
 export OPENAI_API_KEY="your-openai-key"
-export DATABASE_URL="postgres://localhost/knowthis?sslmode=disable"
+export DATABASE_URL="postgres://localhost/knowthis?sslmode=require"
 export PORT="8080"
 ```
 

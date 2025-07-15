@@ -11,11 +11,6 @@ services:
       - ENVIRONMENT=production
       - LOG_FORMAT=json
       - LOG_LEVEL=INFO
-      - DATABASE_URL=postgres://knowthis:password@postgres:5432/knowthis?sslmode=disable
-      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
-      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN}
-      - SLAB_WEBHOOK_SECRET=${SLAB_WEBHOOK_SECRET}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
     depends_on:
       postgres:
         condition: service_healthy
