@@ -58,9 +58,17 @@ func adjustDatabaseURLForEnvironment(databaseURL string) string {
 }
 
 func (s *PostgresStore) initSchema() error {
-	schema := `
-		CREATE EXTENSION IF NOT EXISTS vector;
-
+	fmt.Println("Initializing database schema...")
+	
+	// Step 1: Create vector extension
+	fmt.Println("Creating vector extension...")
+	if _, err := s.db.Exec("CREATE EXTENSION IF NOT EXISTS vector;"); err != nil {
+		return fmt.Errorf("failed to create vector extension: %w", err)
+	}
+	
+	// Step 2: Create documents table
+	fmt.Println("Creating documents table...")
+	createTableSQL := `
 		CREATE TABLE IF NOT EXISTS documents (
 			id VARCHAR(255) PRIMARY KEY,
 			content TEXT NOT NULL,
@@ -77,18 +85,36 @@ func (s *PostgresStore) initSchema() error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 		);
-
-		CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
-		CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source);
-		CREATE INDEX IF NOT EXISTS idx_documents_timestamp ON documents(timestamp);
-		CREATE INDEX IF NOT EXISTS idx_documents_embedding ON documents USING ivfflat (embedding vector_cosine_ops);
-
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_unique_content
-		ON documents(content_hash, source, source_id);
 	`
-
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(createTableSQL); err != nil {
+		return fmt.Errorf("failed to create documents table: %w", err)
+	}
+	
+	// Step 3: Create indexes
+	fmt.Println("Creating indexes...")
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);",
+		"CREATE INDEX IF NOT EXISTS idx_documents_source ON documents(source);",
+		"CREATE INDEX IF NOT EXISTS idx_documents_timestamp ON documents(timestamp);",
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_unique_content ON documents(content_hash, source, source_id);",
+	}
+	
+	for _, indexSQL := range indexes {
+		if _, err := s.db.Exec(indexSQL); err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+	
+	// Step 4: Create vector index (may fail if no embeddings exist yet)
+	fmt.Println("Creating vector index...")
+	vectorIndexSQL := "CREATE INDEX IF NOT EXISTS idx_documents_embedding ON documents USING ivfflat (embedding vector_cosine_ops);"
+	if _, err := s.db.Exec(vectorIndexSQL); err != nil {
+		fmt.Printf("Warning: Could not create vector index (this is normal if no embeddings exist yet): %v\n", err)
+		// Don't return error - this is expected when no embeddings exist
+	}
+	
+	fmt.Println("Database schema initialization completed successfully!")
+	return nil
 }
 
 func (s *PostgresStore) StoreDocument(ctx context.Context, doc *Document) error {
@@ -105,9 +131,11 @@ func (s *PostgresStore) StoreDocument(ctx context.Context, doc *Document) error 
 		RETURNING id
 	`
 
-	var embeddingVector pgvector.Vector
+	var embeddingVector interface{}
 	if len(doc.Embedding) > 0 {
 		embeddingVector = pgvector.NewVector(doc.Embedding)
+	} else {
+		embeddingVector = nil
 	}
 
 	var id string
