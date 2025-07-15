@@ -21,7 +21,7 @@ type Config struct {
 func Load() *Config {
 	return &Config{
 		Port:               getEnvOrDefault("PORT", "8080"),
-		DatabaseURL:        getEnvOrDefault("DATABASE_URL", "postgres://localhost/knowthis?sslmode=disable"),
+		DatabaseURL:        getEnvOrDefault("DATABASE_URL", "postgres://localhost/knowthis?sslmode=require"),
 		SlackBotToken:      os.Getenv("SLACK_BOT_TOKEN"),
 		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
 		SlabWebhookSecret:  os.Getenv("SLAB_WEBHOOK_SECRET"),
