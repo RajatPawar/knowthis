@@ -7,28 +7,40 @@ import (
 )
 
 type Config struct {
-	Port               string
-	DatabaseURL        string
-	SlackBotToken      string
-	SlackAppToken      string
-	SlabWebhookSecret  string
-	OpenAIAPIKey       string
-	LogLevel           string
-	LogFormat          string
-	Environment        string
+	Port              string
+	DatabaseURL       string
+	SlackBotToken     string
+	SlackAppToken     string
+	SlabWebhookSecret string
+	OpenAIAPIKey      string
+	LogLevel          string
+	LogFormat         string
+	Environment       string
 }
 
 func Load() *Config {
+	// Determine default database URL based on environment
+	var defaultDatabaseURL string
+	env := getEnvOrDefault("ENVIRONMENT", "development")
+
+	if env == "production" {
+		// For production environments like Railway, try SSL first, fall back to disable if needed
+		defaultDatabaseURL = "postgres://localhost/knowthis?sslmode=require"
+	} else {
+		// For development, disable SSL by default
+		defaultDatabaseURL = "postgres://localhost/knowthis?sslmode=disable"
+	}
+
 	return &Config{
-		Port:               getEnvOrDefault("PORT", "8080"),
-		DatabaseURL:        getEnvOrDefault("DATABASE_URL", "postgres://localhost/knowthis?sslmode=require"),
-		SlackBotToken:      os.Getenv("SLACK_BOT_TOKEN"),
-		SlackAppToken:      os.Getenv("SLACK_APP_TOKEN"),
-		SlabWebhookSecret:  os.Getenv("SLAB_WEBHOOK_SECRET"),
-		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
-		LogLevel:           getEnvOrDefault("LOG_LEVEL", "INFO"),
-		LogFormat:          getEnvOrDefault("LOG_FORMAT", "text"),
-		Environment:        getEnvOrDefault("ENVIRONMENT", "development"),
+		Port:              getEnvOrDefault("PORT", "8080"),
+		DatabaseURL:       getEnvOrDefault("DATABASE_URL", defaultDatabaseURL),
+		SlackBotToken:     os.Getenv("SLACK_BOT_TOKEN"),
+		SlackAppToken:     os.Getenv("SLACK_APP_TOKEN"),
+		SlabWebhookSecret: os.Getenv("SLAB_WEBHOOK_SECRET"),
+		OpenAIAPIKey:      os.Getenv("OPENAI_API_KEY"),
+		LogLevel:          getEnvOrDefault("LOG_LEVEL", "INFO"),
+		LogFormat:         getEnvOrDefault("LOG_FORMAT", "text"),
+		Environment:       env,
 	}
 }
 
