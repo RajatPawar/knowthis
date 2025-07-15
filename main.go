@@ -29,10 +29,25 @@ type ServiceBundle struct {
 	SlackHandler        *handlers.SlackHandler
 	SlabHandler         *handlers.SlabHandler
 	QueryHandler        *handlers.QueryHandler
+	Config              *config.Config
 }
 
-func initializeServices(cfg *config.Config) *ServiceBundle {
+func initializeServices() *ServiceBundle {
 	for {
+		slog.Info("Loading configuration...")
+		
+		// Load and validate configuration with retry
+		var cfg *config.Config
+		for {
+			cfg = config.Load()
+			if err := cfg.Validate(); err != nil {
+				slog.Error("Invalid configuration, retrying in 30s", "error", err)
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			break
+		}
+		
 		slog.Info("Initializing services...")
 		
 		// Initialize storage with retry
@@ -165,6 +180,7 @@ func initializeServices(cfg *config.Config) *ServiceBundle {
 			SlackHandler:        slackHandler,
 			SlabHandler:         slabHandler,
 			QueryHandler:        queryHandler,
+			Config:              cfg,
 		}
 	}
 }
@@ -173,16 +189,10 @@ func main() {
 	// Setup structured logging
 	logging.SetupLogger()
 	
-	cfg := config.Load()
-	if err := cfg.Validate(); err != nil {
-		slog.Error("Invalid configuration", "error", err)
-		os.Exit(1)
-	}
-	
 	slog.Info("Starting KnowThis application", slog.String("version", "1.0.0"))
 	
-	// Initialize all services with retry logic
-	services := initializeServices(cfg)
+	// Initialize all services with retry logic (includes config validation)
+	services := initializeServices()
 	defer services.Store.Close()
 
 	// Create context for graceful shutdown
@@ -192,11 +202,18 @@ func main() {
 	// Start background jobs
 	go services.EmbeddingProcessor.Start(ctx)
 	
-	// Start Slack Socket Mode in goroutine
+	// Start Slack Socket Mode in goroutine with retry logic
 	go func() {
-		if err := services.SlackHandler.Start(); err != nil {
-			slog.Error("Failed to start Slack handler", "error", err)
-			os.Exit(1)
+		for {
+			if err := services.SlackHandler.Start(); err != nil {
+				slog.Error("Failed to start Slack handler, retrying in 30s", "error", err)
+				time.Sleep(30 * time.Second)
+				
+				// Reinitialize services with new config on auth failure
+				services = initializeServices()
+				continue
+			}
+			break
 		}
 	}()
 
@@ -232,7 +249,7 @@ func main() {
 	router.Handle("/metrics", promhttp.Handler()).Methods("GET")
 
 	server := &http.Server{
-		Addr:         ":" + cfg.Port,
+		Addr:         ":" + services.Config.Port,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
@@ -241,7 +258,7 @@ func main() {
 
 	// Start server
 	go func() {
-		slog.Info("Server starting", slog.String("port", cfg.Port))
+		slog.Info("Server starting", slog.String("port", services.Config.Port))
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("Server failed to start", "error", err)
 			os.Exit(1)

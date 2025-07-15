@@ -22,7 +22,10 @@ type SlackHandler struct {
 }
 
 func NewSlackHandler(botToken, appToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
-	client := slack.New(botToken)
+	client := slack.New(
+		botToken,
+		slack.OptionAppLevelToken(appToken),
+	)
 	socketMode := socketmode.New(client)
 	
 	return &SlackHandler{
