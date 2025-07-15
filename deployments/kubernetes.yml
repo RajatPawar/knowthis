@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: knowthis
+  labels:
+    app: knowthis
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: knowthis
+  template:
+    metadata:
+      labels:
+        app: knowthis
+    spec:
+      containers:
+      - name: knowthis
+        image: knowthis:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: LOG_FORMAT
+          value: "json"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: database-url
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: slack-bot-token
+        - name: SLACK_APP_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: slack-app-token
+        - name: SLAB_WEBHOOK_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: slab-webhook-secret
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: openai-api-key
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: knowthis-secrets
+              key: anthropic-api-key
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: knowthis-service
+spec:
+  selector:
+    app: knowthis
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 8080
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: knowthis-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+spec:
+  rules:
+  - host: knowthis.yourdomain.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: knowthis-service
+            port:
+              number: 80
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: knowthis-secrets
+type: Opaque
+data:
+  # Base64 encoded values - replace with actual values
+  database-url: cG9zdGdyZXM6Ly91c2VyOnBhc3N3b3JkQGhvc3Q6cG9ydC9kYg==
+  slack-bot-token: eG94Yi15b3VyLXRva2Vu
+  slack-app-token: eGFwcC15b3VyLXRva2Vu
+  slab-webhook-secret: eW91ci13ZWJob29rLXNlY3JldA==
+  openai-api-key: eW91ci1vcGVuYWkta2V5
+  anthropic-api-key: eW91ci1hbnRocm9waWMta2V5
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: knowthis-metrics
+  labels:
+    app: knowthis
+spec:
+  selector:
+    matchLabels:
+      app: knowthis
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s

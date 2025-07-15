@@ -1,0 +1,62 @@
+# Railway deployment configuration
+# This file is used by Railway to deploy the application
+
+# Build configuration
+build:
+  builder: dockerfile
+
+# Service configuration
+services:
+  - name: knowthis
+    source: .
+    build:
+      command: go build -o knowthis main.go
+    start:
+      command: ./knowthis
+    variables:
+      ENVIRONMENT: production
+      LOG_FORMAT: json
+      LOG_LEVEL: INFO
+      PORT: $PORT
+      DATABASE_URL: $DATABASE_URL
+      SLACK_BOT_TOKEN: $SLACK_BOT_TOKEN
+      SLACK_APP_TOKEN: $SLACK_APP_TOKEN
+      SLAB_WEBHOOK_SECRET: $SLAB_WEBHOOK_SECRET
+      OPENAI_API_KEY: $OPENAI_API_KEY
+      ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
+    healthcheck:
+      path: /health
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    resources:
+      memory: 512
+      cpu: 500
+
+# Database configuration (PostgreSQL with pgvector)
+postgres:
+  version: 16
+  extensions:
+    - vector
+
+# Monitoring
+monitoring:
+  metrics:
+    enabled: true
+    path: /metrics
+    
+# Networking
+networking:
+  ingress:
+    - path: /webhook/slab
+      methods: [POST]
+      rate_limit: 100
+    - path: /api/query
+      methods: [POST]
+      rate_limit: 10
+    - path: /health
+      methods: [GET]
+    - path: /ready
+      methods: [GET]
+    - path: /metrics
+      methods: [GET]
