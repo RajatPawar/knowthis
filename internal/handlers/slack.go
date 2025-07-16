@@ -20,6 +20,7 @@ type SlackHandler struct {
 	socketMode *socketmode.Client
 	store      storage.Store
 	ragService *services.RAGService
+	botUserID  string
 }
 
 func NewSlackHandler(botToken, appToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
@@ -29,11 +30,25 @@ func NewSlackHandler(botToken, appToken string, store storage.Store, ragService 
 	)
 	socketMode := socketmode.New(client)
 	
+	// Get bot user ID
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	authTest, err := client.AuthTestContext(ctx)
+	var botUserID string
+	if err != nil {
+		log.Printf("Warning: Could not get bot user ID: %v", err)
+	} else {
+		botUserID = authTest.UserID
+		log.Printf("Bot user ID: %s", botUserID)
+	}
+	
 	return &SlackHandler{
 		client:     client,
 		socketMode: socketMode,
 		store:      store,
 		ragService: ragService,
+		botUserID:  botUserID,
 	}
 }
 
