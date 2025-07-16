@@ -172,6 +172,12 @@ func (h *SlackHandler) storeMessage(ctx context.Context, msg slack.Message, chan
 		return nil
 	}
 	
+	// Skip messages from our own bot
+	if h.botUserID != "" && msg.User == h.botUserID {
+		log.Printf("Skipping message from bot user: %s", msg.User)
+		return nil
+	}
+	
 	// Clean text - remove user mentions and channel references
 	cleanText := h.cleanMessageText(msg.Text)
 	

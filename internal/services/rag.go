@@ -50,10 +50,11 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 		return nil, fmt.Errorf("failed to search similar documents: %w", err)
 	}
 
-	// Filter documents with good similarity (>0.7)
+	// Filter documents with good similarity (>0.5)
 	var relevantDocs []*storage.Document
 	for _, doc := range documents {
-		if doc.Similarity > 0.7 {
+		slog.Info("Document similarity", "similarity", doc.Similarity, "content", doc.Content[:min(100, len(doc.Content))])
+		if doc.Similarity > 0.5 {
 			relevantDocs = append(relevantDocs, doc)
 		}
 	}
