@@ -56,7 +56,7 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 	}
 	slog.Info("Vector search completed", "documents_found", len(documents))
 
-	// Filter documents with good similarity (>0.5)
+	// Filter documents with good similarity (>0.75)
 	var relevantDocs []*storage.Document
 	for i, doc := range documents {
 		contentPreview := doc.Content
@@ -70,7 +70,7 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 			"source", doc.Source,
 			"id", doc.ID)
 		
-		if doc.Similarity > 0.5 {
+		if doc.Similarity > 0.75 && isQualityContent(doc.Content) {
 			relevantDocs = append(relevantDocs, doc)
 		}
 	}
@@ -78,7 +78,18 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 	slog.Info("Similarity filtering completed", 
 		"total_documents", len(documents),
 		"relevant_documents", len(relevantDocs),
-		"threshold", 0.5)
+		"threshold", 0.75)
+
+	// If no high-quality results, try with lower threshold but still apply quality filter
+	if len(relevantDocs) == 0 {
+		slog.Info("No high-quality results, trying lower threshold")
+		for _, doc := range documents {
+			if doc.Similarity > 0.6 && isQualityContent(doc.Content) {
+				relevantDocs = append(relevantDocs, doc)
+			}
+		}
+		slog.Info("Lower threshold results", "found", len(relevantDocs))
+	}
 
 	if len(relevantDocs) == 0 {
 		slog.Warn("No relevant documents found", "query", query)
@@ -100,6 +111,49 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 		Sources: relevantDocs,
 		Query:   query,
 	}, nil
+}
+
+// isQualityContent filters out low-quality content that shouldn't be in search results
+func isQualityContent(content string) bool {
+	content = strings.ToLower(strings.TrimSpace(content))
+	
+	// Filter out bot responses and acknowledgments
+	botPatterns := []string{
+		"got it", "i've processed", "stored the messages",
+		":+1:", "👍", "✅", "done", "processed and stored",
+	}
+	
+	for _, pattern := range botPatterns {
+		if strings.Contains(content, pattern) {
+			return false
+		}
+	}
+	
+	// Filter out test/placeholder content
+	testPatterns := []string{
+		"test", "testing", "some other content", 
+		"this is my other message", "should also go in",
+		"hello world", "sample", "example",
+	}
+	
+	for _, pattern := range testPatterns {
+		if strings.Contains(content, pattern) {
+			return false
+		}
+	}
+	
+	// Require minimum meaningful length (after cleaning)
+	if len(content) < 20 {
+		return false
+	}
+	
+	// Require some meaningful words
+	words := strings.Fields(content)
+	if len(words) < 4 {
+		return false
+	}
+	
+	return true
 }
 
 func (r *RAGService) generateAnswer(ctx context.Context, query string, documents []*storage.Document) (string, error) {
