@@ -178,13 +178,32 @@ func (s *PostgresStore) UpdateEmbedding(ctx context.Context, documentID string, 
 }
 
 func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, limit int) ([]*Document, error) {
+	// First, let's check how many documents have embeddings
+	countQuery := `SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL`
+	var totalWithEmbeddings int
+	err := s.db.QueryRowContext(ctx, countQuery).Scan(&totalWithEmbeddings)
+	if err != nil {
+		fmt.Printf("Warning: Could not count documents with embeddings: %v\n", err)
+	} else {
+		fmt.Printf("Documents with embeddings: %d\n", totalWithEmbeddings)
+	}
+
+	// Count documents with non-zero embeddings
+	nonZeroQuery := `SELECT COUNT(*) FROM documents WHERE embedding IS NOT NULL AND (embedding <#> embedding) > 0`
+	var totalNonZero int
+	err = s.db.QueryRowContext(ctx, nonZeroQuery).Scan(&totalNonZero)
+	if err != nil {
+		fmt.Printf("Warning: Could not count non-zero embeddings: %v\n", err)
+	} else {
+		fmt.Printf("Documents with non-zero embeddings: %d\n", totalNonZero)
+	}
+
 	query := `
 		SELECT id, content, source, source_id, title, channel_id, post_id,
 			   user_id, user_name, timestamp, content_hash, embedding,
 			   1 - (embedding <=> $1) as similarity
 		FROM documents
 		WHERE embedding IS NOT NULL 
-		  AND (embedding <#> embedding) > 0
 		ORDER BY embedding <=> $1
 		LIMIT $2
 	`
