@@ -23,8 +23,8 @@ func NewEmbeddingProcessor(store storage.Store, embeddingService *services.Embed
 	return &EmbeddingProcessor{
 		store:            store,
 		embeddingService: embeddingService,
-		batchSize:        50,
-		interval:         30 * time.Second,
+		batchSize:        10, // Reduced batch size for cost control
+		interval:         60 * time.Second, // Increased interval to reduce API calls
 		done:             make(chan struct{}),
 	}
 }

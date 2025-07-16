@@ -175,6 +175,18 @@ func (h *SlackHandler) storeMessage(ctx context.Context, msg slack.Message, chan
 	// Clean text - remove user mentions and channel references
 	cleanText := h.cleanMessageText(msg.Text)
 	
+	// Skip messages that are purely mentions (empty after cleaning)
+	if strings.TrimSpace(cleanText) == "" {
+		log.Printf("Skipping message that contains only mentions/references")
+		return nil
+	}
+	
+	// Skip very short messages (not worth embedding cost)
+	if len(strings.TrimSpace(cleanText)) < 10 {
+		log.Printf("Skipping very short message: %s", cleanText)
+		return nil
+	}
+	
 	document := &storage.Document{
 		ID:          fmt.Sprintf("slack_%s_%s", channel, msg.Timestamp),
 		Content:     cleanText,
