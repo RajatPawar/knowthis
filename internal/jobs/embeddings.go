@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"knowthis/internal/metrics"
@@ -107,8 +108,23 @@ func (e *EmbeddingProcessor) processBatch(ctx context.Context) error {
 func (e *EmbeddingProcessor) processDocument(ctx context.Context, doc *storage.Document) error {
 	start := time.Now()
 	
+	// Skip documents with empty content
+	content := strings.TrimSpace(doc.Content)
+	if content == "" {
+		slog.Warn("Skipping document with empty content", slog.String("document_id", doc.ID))
+		return nil
+	}
+	
+	// Skip very short content (not worth embedding)
+	if len(content) < 10 {
+		slog.Debug("Skipping document with very short content", 
+			slog.String("document_id", doc.ID),
+			slog.String("content", content))
+		return nil
+	}
+	
 	// Generate embedding
-	embedding, err := e.embeddingService.GenerateEmbedding(ctx, doc.Content)
+	embedding, err := e.embeddingService.GenerateEmbedding(ctx, content)
 	if err != nil {
 		return err
 	}

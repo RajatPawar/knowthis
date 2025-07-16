@@ -187,15 +187,22 @@ func (h *SlackHandler) storeMessage(ctx context.Context, msg slack.Message, chan
 		return nil
 	}
 	
+	// Final validation - ensure content is not empty after all processing
+	finalContent := strings.TrimSpace(cleanText)
+	if finalContent == "" {
+		log.Printf("Skipping message with empty final content")
+		return nil
+	}
+	
 	document := &storage.Document{
 		ID:          fmt.Sprintf("slack_%s_%s", channel, msg.Timestamp),
-		Content:     cleanText,
+		Content:     finalContent,
 		Source:      "slack",
 		SourceID:    msg.Timestamp,
 		ChannelID:   channel,
 		UserID:      msg.User,
 		Timestamp:   parseSlackTimestamp(msg.Timestamp),
-		ContentHash: storage.HashContent(cleanText),
+		ContentHash: storage.HashContent(finalContent),
 	}
 	
 	return h.store.StoreDocument(ctx, document)
