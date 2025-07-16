@@ -183,7 +183,8 @@ func (s *PostgresStore) SearchSimilar(ctx context.Context, embedding []float32, 
 			   user_id, user_name, timestamp, content_hash, embedding,
 			   1 - (embedding <=> $1) as similarity
 		FROM documents
-		WHERE embedding IS NOT NULL
+		WHERE embedding IS NOT NULL 
+		  AND array_length(embedding, 1) > 1
 		ORDER BY embedding <=> $1
 		LIMIT $2
 	`

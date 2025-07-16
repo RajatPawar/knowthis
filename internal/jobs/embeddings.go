@@ -108,19 +108,23 @@ func (e *EmbeddingProcessor) processBatch(ctx context.Context) error {
 func (e *EmbeddingProcessor) processDocument(ctx context.Context, doc *storage.Document) error {
 	start := time.Now()
 	
-	// Skip documents with empty content
+	// Skip documents with empty content but mark them so they don't get processed again
 	content := strings.TrimSpace(doc.Content)
 	if content == "" {
-		slog.Warn("Skipping document with empty content", slog.String("document_id", doc.ID))
-		return nil
+		slog.Warn("Marking document with empty content", slog.String("document_id", doc.ID))
+		// Create a placeholder embedding (single zero) to mark as processed
+		emptyEmbedding := []float32{0.0}
+		return e.store.UpdateEmbedding(ctx, doc.ID, emptyEmbedding)
 	}
 	
-	// Skip very short content (not worth embedding)
+	// Skip very short content but mark them so they don't get processed again
 	if len(content) < 10 {
-		slog.Debug("Skipping document with very short content", 
+		slog.Debug("Marking document with very short content", 
 			slog.String("document_id", doc.ID),
 			slog.String("content", content))
-		return nil
+		// Create a placeholder embedding (single zero) to mark as processed
+		emptyEmbedding := []float32{0.0}
+		return e.store.UpdateEmbedding(ctx, doc.ID, emptyEmbedding)
 	}
 	
 	// Generate embedding
