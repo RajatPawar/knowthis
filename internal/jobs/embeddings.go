@@ -112,8 +112,8 @@ func (e *EmbeddingProcessor) processDocument(ctx context.Context, doc *storage.D
 	content := strings.TrimSpace(doc.Content)
 	if content == "" {
 		slog.Warn("Marking document with empty content", slog.String("document_id", doc.ID))
-		// Create a placeholder embedding (single zero) to mark as processed
-		emptyEmbedding := []float32{0.0}
+		// Create a placeholder embedding (1536 zeros) to mark as processed
+		emptyEmbedding := make([]float32, 1536)
 		return e.store.UpdateEmbedding(ctx, doc.ID, emptyEmbedding)
 	}
 	
@@ -122,8 +122,8 @@ func (e *EmbeddingProcessor) processDocument(ctx context.Context, doc *storage.D
 		slog.Debug("Marking document with very short content", 
 			slog.String("document_id", doc.ID),
 			slog.String("content", content))
-		// Create a placeholder embedding (single zero) to mark as processed
-		emptyEmbedding := []float32{0.0}
+		// Create a placeholder embedding (1536 zeros) to mark as processed
+		emptyEmbedding := make([]float32, 1536)
 		return e.store.UpdateEmbedding(ctx, doc.ID, emptyEmbedding)
 	}
 	

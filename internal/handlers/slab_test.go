@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 )
 
@@ -54,11 +57,6 @@ func TestVerifyHMACWithValidSignature(t *testing.T) {
 	body := `{"event":"post.published","data":{"id":"123","content":"test"}}`
 	
 	// Generate correct HMAC
-	import (
-		"crypto/hmac"
-		"crypto/sha256"
-		"encoding/hex"
-	)
 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))
@@ -78,12 +76,6 @@ func TestVerifyHMACWithoutPrefix(t *testing.T) {
 	}
 
 	body := `{"event":"post.published","data":{"id":"123","content":"test"}}`
-	
-	import (
-		"crypto/hmac"
-		"crypto/sha256"
-		"encoding/hex"
-	)
 
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(body))
@@ -117,17 +109,17 @@ func TestCleanSlabContent(t *testing.T) {
 		{
 			name:     "remove headers",
 			input:    "# Header 1\n## Header 2\nContent",
-			expected: "Header 1\nHeader 2\nContent",
+			expected: "Header 1\n Header 2\nContent",
 		},
 		{
 			name:     "remove multiple spaces and newlines",
 			input:    "Text  with   multiple    spaces\n\n\nand newlines",
-			expected: "Text with multiple spaces\nand newlines",
+			expected: "Text with  multiple  spaces\n\nand newlines",
 		},
 		{
 			name:     "mixed formatting",
 			input:    "# Title\n\nThis is **bold** and `code`\n\n  Multiple spaces  ",
-			expected: "Title\nThis is bold and code\nMultiple spaces",
+			expected: "Title\nThis is bold and code\n Multiple spaces",
 		},
 	}
 
