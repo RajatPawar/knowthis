@@ -101,7 +101,8 @@ func TestSlackHandler_CleanMessageText(t *testing.T) {
 func TestSlackHandler_StoreMessage(t *testing.T) {
 	mockStorage := &mockStore{}
 	handler := &SlackHandler{
-		store: mockStorage,
+		store:     mockStorage,
+		botUserID: "U095Z0GRZGS", // Set the bot user ID for testing
 	}
 
 	testCases := []struct {
@@ -205,6 +206,18 @@ func TestSlackHandler_StoreMessage(t *testing.T) {
 			expectStored:   false,
 			expectedReason: "empty after cleaning",
 		},
+		{
+			name: "message from bot user",
+			message: slack.Message{
+				Msg: slack.Msg{
+					Text:      ":+1: Got it! I've processed and stored the messages.",
+					Timestamp: "1752622376.748909",
+					User:      "U095Z0GRZGS", // This is the bot's user ID
+				},
+			},
+			expectStored:   false,
+			expectedReason: "bot user message",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -270,6 +283,57 @@ func TestParseSlackTimestamp(t *testing.T) {
 				t.Errorf("Expected %v, got %v", tc.expected, result)
 			}
 		})
+	}
+}
+
+func TestBotUserIDFiltering(t *testing.T) {
+	// Test that bot user ID filtering prevents self-storage
+	mockStorage := &mockStore{}
+	handler := &SlackHandler{
+		store:     mockStorage,
+		botUserID: "BOTUSER123", // Different bot user ID
+	}
+
+	// Message from regular user - should be stored
+	regularUserMsg := slack.Message{
+		Msg: slack.Msg{
+			Text:      "This is a regular user message",
+			Timestamp: "1234567890.123456",
+			User:      "REGULARUSER456",
+		},
+	}
+
+	// Message from bot user - should NOT be stored
+	botUserMsg := slack.Message{
+		Msg: slack.Msg{
+			Text:      "Bot response message",
+			Timestamp: "1234567890.123457",
+			User:      "BOTUSER123", // Same as handler.botUserID
+		},
+	}
+
+	// Test regular user message - should be stored
+	err := handler.storeMessage(context.Background(), regularUserMsg, "C123456")
+	if err != nil {
+		t.Errorf("Unexpected error storing regular user message: %v", err)
+	}
+
+	// Verify regular user message was stored
+	if len(mockStorage.stored) != 1 {
+		t.Errorf("Expected 1 stored message from regular user, got %d", len(mockStorage.stored))
+	}
+
+	// Test bot user message - should NOT be stored
+	initialCount := len(mockStorage.stored)
+	err = handler.storeMessage(context.Background(), botUserMsg, "C123456")
+	if err != nil {
+		t.Errorf("Unexpected error processing bot user message: %v", err)
+	}
+
+	// Verify bot message was NOT added (count should remain the same)
+	if len(mockStorage.stored) != initialCount {
+		t.Errorf("Bot user message should not have been stored. Expected %d messages, got %d", 
+			initialCount, len(mockStorage.stored))
 	}
 }
 

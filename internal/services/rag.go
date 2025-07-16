@@ -38,28 +38,50 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
+	slog.Info("RAG Query started", "query", query)
+
 	// Generate embedding for the query
 	queryEmbedding, err := r.embeddingService.GenerateEmbedding(ctx, query)
 	if err != nil {
+		slog.Error("Failed to generate query embedding", "error", err)
 		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
 	}
+	slog.Info("Query embedding generated", "embedding_length", len(queryEmbedding))
 
 	// Search for similar documents
 	documents, err := r.store.SearchSimilar(ctx, queryEmbedding, 10)
 	if err != nil {
+		slog.Error("Failed to search similar documents", "error", err)
 		return nil, fmt.Errorf("failed to search similar documents: %w", err)
 	}
+	slog.Info("Vector search completed", "documents_found", len(documents))
 
 	// Filter documents with good similarity (>0.5)
 	var relevantDocs []*storage.Document
-	for _, doc := range documents {
-		slog.Info("Document similarity", "similarity", doc.Similarity, "content", doc.Content[:min(100, len(doc.Content))])
+	for i, doc := range documents {
+		contentPreview := doc.Content
+		if len(contentPreview) > 100 {
+			contentPreview = contentPreview[:100] + "..."
+		}
+		slog.Info("Document similarity", 
+			"index", i,
+			"similarity", doc.Similarity, 
+			"content", contentPreview,
+			"source", doc.Source,
+			"id", doc.ID)
+		
 		if doc.Similarity > 0.5 {
 			relevantDocs = append(relevantDocs, doc)
 		}
 	}
 
+	slog.Info("Similarity filtering completed", 
+		"total_documents", len(documents),
+		"relevant_documents", len(relevantDocs),
+		"threshold", 0.5)
+
 	if len(relevantDocs) == 0 {
+		slog.Warn("No relevant documents found", "query", query)
 		return &QueryResult{
 			Answer:  "I couldn't find any relevant information to answer your question.",
 			Sources: []*storage.Document{},
