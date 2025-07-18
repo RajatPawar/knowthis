@@ -10,7 +10,6 @@ type Config struct {
 	Port              string
 	DatabaseURL       string
 	SlackBotToken     string
-	SlabWebhookSecret string
 	OpenAIAPIKey      string
 	LogLevel          string
 	LogFormat         string
@@ -22,7 +21,6 @@ func Load() *Config {
 		Port:              os.Getenv("PORT"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		SlackBotToken:     os.Getenv("SLACK_BOT_TOKEN"),
-		SlabWebhookSecret: os.Getenv("SLAB_WEBHOOK_SECRET"),
 		OpenAIAPIKey:      os.Getenv("OPENAI_API_KEY"),
 		LogLevel:          os.Getenv("LOG_LEVEL"),
 		LogFormat:         os.Getenv("LOG_FORMAT"),

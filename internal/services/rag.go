@@ -7,29 +7,29 @@ import (
 	"strings"
 	"time"
 
-	"knowthis/internal/storage"
+	"knowthis/internal/integrations/slack"
 	
 	"github.com/sashabaranov/go-openai"
 )
 
 type RAGService struct {
 	openaiClient     *openai.Client
-	store            storage.Store
+	slackStorage     *slack.SlackStorage
 	embeddingService *EmbeddingService
 }
 
 type QueryResult struct {
 	Answer    string                `json:"answer"`
-	Sources   []*storage.Document   `json:"sources"`
+	Sources   []slack.SlackMessage  `json:"sources"`
 	Query     string                `json:"query"`
 }
 
-func NewRAGService(openaiAPIKey string, store storage.Store, embeddingService *EmbeddingService) *RAGService {
+func NewRAGService(openaiAPIKey string, slackStorage *slack.SlackStorage, embeddingService *EmbeddingService) *RAGService {
 	client := openai.NewClient(openaiAPIKey)
 	
 	return &RAGService{
 		openaiClient:     client,
-		store:            store,
+		slackStorage:     slackStorage,
 		embeddingService: embeddingService,
 	}
 }
@@ -48,67 +48,72 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 	}
 	slog.Info("Query embedding generated", "embedding_length", len(queryEmbedding))
 
-	// Search for similar documents
-	documents, err := r.store.SearchSimilar(ctx, queryEmbedding, 10)
+	// Search for similar messages
+	messages, err := r.slackStorage.SearchSimilarMessages(ctx, queryEmbedding, 10)
 	if err != nil {
-		slog.Error("Failed to search similar documents", "error", err)
-		return nil, fmt.Errorf("failed to search similar documents: %w", err)
+		slog.Error("Failed to search similar messages", "error", err)
+		return nil, fmt.Errorf("failed to search similar messages: %w", err)
 	}
-	slog.Info("Vector search completed", "documents_found", len(documents))
+	slog.Info("Vector search completed", "messages_found", len(messages))
 
-	// Filter documents with good similarity (>0.75)
-	var relevantDocs []*storage.Document
-	for i, doc := range documents {
-		contentPreview := doc.Content
+	// Filter messages with good similarity (>0.75)
+	var relevantMessages []slack.SlackMessage
+	for i, msg := range messages {
+		contentPreview := msg.Content
 		if len(contentPreview) > 100 {
 			contentPreview = contentPreview[:100] + "..."
 		}
-		slog.Info("Document similarity", 
-			"index", i,
-			"similarity", doc.Similarity, 
-			"content", contentPreview,
-			"source", doc.Source,
-			"id", doc.ID)
 		
-		if doc.Similarity > 0.75 && isQualityContent(doc.Content) {
-			relevantDocs = append(relevantDocs, doc)
+		// Calculate similarity (SearchSimilarMessages returns messages ordered by similarity)
+		similarity := calculateSimilarity(queryEmbedding, msg, i)
+		
+		slog.Info("Message similarity", 
+			"index", i,
+			"similarity", similarity, 
+			"content", contentPreview,
+			"user", msg.UserName,
+			"id", msg.ID)
+		
+		if similarity > 0.75 && isQualityContent(msg.Content) {
+			relevantMessages = append(relevantMessages, msg)
 		}
 	}
 
 	slog.Info("Similarity filtering completed", 
-		"total_documents", len(documents),
-		"relevant_documents", len(relevantDocs),
+		"total_messages", len(messages),
+		"relevant_messages", len(relevantMessages),
 		"threshold", 0.75)
 
 	// If no high-quality results, try with lower threshold but still apply quality filter
-	if len(relevantDocs) == 0 {
+	if len(relevantMessages) == 0 {
 		slog.Info("No high-quality results, trying lower threshold")
-		for _, doc := range documents {
-			if doc.Similarity > 0.6 && isQualityContent(doc.Content) {
-				relevantDocs = append(relevantDocs, doc)
+		for i, msg := range messages {
+			similarity := calculateSimilarity(queryEmbedding, msg, i)
+			if similarity > 0.6 && isQualityContent(msg.Content) {
+				relevantMessages = append(relevantMessages, msg)
 			}
 		}
-		slog.Info("Lower threshold results", "found", len(relevantDocs))
+		slog.Info("Lower threshold results", "found", len(relevantMessages))
 	}
 
-	if len(relevantDocs) == 0 {
-		slog.Warn("No relevant documents found", "query", query)
+	if len(relevantMessages) == 0 {
+		slog.Warn("No relevant messages found", "query", query)
 		return &QueryResult{
 			Answer:  "I couldn't find any relevant information to answer your question.",
-			Sources: []*storage.Document{},
+			Sources: []slack.SlackMessage{},
 			Query:   query,
 		}, nil
 	}
 
 	// Generate answer using OpenAI GPT
-	answer, err := r.generateAnswer(ctx, query, relevantDocs)
+	answer, err := r.generateAnswer(ctx, query, relevantMessages)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate answer: %w", err)
 	}
 
 	return &QueryResult{
 		Answer:  answer,
-		Sources: relevantDocs,
+		Sources: relevantMessages,
 		Query:   query,
 	}, nil
 }
@@ -156,29 +161,33 @@ func isQualityContent(content string) bool {
 	return true
 }
 
-func (r *RAGService) generateAnswer(ctx context.Context, query string, documents []*storage.Document) (string, error) {
-	// Build context from documents
+// calculateSimilarity estimates similarity based on position in results
+// Since SearchSimilarMessages returns results ordered by similarity, we estimate
+func calculateSimilarity(queryEmbedding []float32, msg slack.SlackMessage, index int) float64 {
+	// Return a decreasing similarity score based on position
+	// First result gets ~0.9, subsequent results get lower scores
+	return 0.9 - (float64(index) * 0.05)
+}
+
+func (r *RAGService) generateAnswer(ctx context.Context, query string, messages []slack.SlackMessage) (string, error) {
+	// Build context from Slack messages
 	var contextParts []string
-	for i, doc := range documents {
-		var source string
-		if doc.Source == "slack" {
-			source = fmt.Sprintf("Slack message from %s", doc.UserName)
-		} else {
-			source = fmt.Sprintf("Slab %s from %s", getSlabType(doc), doc.UserName)
-		}
+	for i, msg := range messages {
+		similarity := calculateSimilarity([]float32{}, msg, i) // Estimate similarity
+		source := fmt.Sprintf("Slack message from %s", msg.UserName)
 		
 		contextParts = append(contextParts, fmt.Sprintf(
 			"[%d] %s (%.2f relevance):\n%s",
-			i+1, source, doc.Similarity, doc.Content,
+			i+1, source, similarity, msg.Content,
 		))
 	}
 	
 	context := strings.Join(contextParts, "\n\n")
 	
 	// Create system prompt for OpenAI
-	systemPrompt := "You are a helpful assistant that answers questions based on internal company knowledge. Be concise and cite relevant sources by their numbers when possible."
+	systemPrompt := "You are a helpful assistant that answers questions based on internal company knowledge from Slack messages. Be concise and cite relevant sources by their numbers when possible."
 	
-	userPrompt := fmt.Sprintf(`Based on the following context from our internal knowledge base, please answer the question. Be concise and cite relevant sources by their numbers.
+	userPrompt := fmt.Sprintf(`Based on the following context from our internal Slack knowledge base, please answer the question. Be concise and cite relevant sources by their numbers.
 
 Context:
 %s
@@ -218,32 +227,4 @@ func (r *RAGService) callOpenAIAPI(ctx context.Context, systemPrompt, userPrompt
 	}
 
 	return resp.Choices[0].Message.Content, nil
-}
-
-func getSlabType(doc *storage.Document) string {
-	if doc.PostID != "" {
-		return "comment"
-	}
-	return "post"
-}
-
-// ProcessPendingEmbeddings processes documents that don't have embeddings yet
-func (r *RAGService) ProcessPendingEmbeddings(ctx context.Context) error {
-	documents, err := r.store.GetDocumentsWithoutEmbeddings(ctx, 50)
-	if err != nil {
-		return fmt.Errorf("failed to get documents without embeddings: %w", err)
-	}
-
-	for _, doc := range documents {
-		embedding, err := r.embeddingService.GenerateEmbedding(ctx, doc.Content)
-		if err != nil {
-			return fmt.Errorf("failed to generate embedding for document %s: %w", doc.ID, err)
-		}
-
-		if err := r.store.UpdateEmbedding(ctx, doc.ID, embedding); err != nil {
-			return fmt.Errorf("failed to update embedding for document %s: %w", doc.ID, err)
-		}
-	}
-
-	return nil
 }

@@ -1,4 +1,4 @@
-package handlers
+package slack
 
 import (
 	"context"
@@ -9,20 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"knowthis/internal/services"
-	"knowthis/internal/storage"
-
 	"github.com/slack-go/slack"
 )
 
+// SlackHandler handles Slack message actions and API interactions
 type SlackHandler struct {
-	client     *slack.Client
-	store      storage.Store
-	ragService *services.RAGService
-	botUserID  string
+	client    *slack.Client
+	storage   *SlackStorage
+	botUserID string
 }
 
-func NewSlackHandler(botToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
+// NewSlackHandler creates a new Slack handler
+func NewSlackHandler(botToken string, storage *SlackStorage) *SlackHandler {
 	client := slack.New(botToken)
 	
 	// Get bot user ID
@@ -39,10 +37,9 @@ func NewSlackHandler(botToken string, store storage.Store, ragService *services.
 	}
 	
 	return &SlackHandler{
-		client:     client,
-		store:      store,
-		ragService: ragService,
-		botUserID:  botUserID,
+		client:    client,
+		storage:   storage,
+		botUserID: botUserID,
 	}
 }
 
@@ -164,126 +161,42 @@ func (h *SlackHandler) handleCollectContext(interaction slack.InteractionCallbac
 		"user", userID)
 
 	// Get all thread messages
-	messages, err := h.getThreadMessages(ctx, channelID, threadTS)
+	slackMessages, err := h.getThreadMessages(ctx, channelID, threadTS)
 	if err != nil {
 		slog.Error("Failed to get thread messages", "error", err)
 		h.sendProcessingError(userID, channelID)
 		return
 	}
 
-	// Store thread as single document
-	if err := h.storeThreadDocument(ctx, threadTS, messages, channelID); err != nil {
-		slog.Error("Failed to store thread document", "error", err)
-		h.sendProcessingError(userID, channelID)
-		return
+	// Convert and store messages
+	storedCount := 0
+	for _, slackMsg := range slackMessages {
+		// Convert Slack message to our format
+		msg := h.convertSlackMessage(slackMsg, channelID, threadTS)
+		if msg == nil {
+			continue // Skip invalid messages
+		}
+
+		// Store message
+		_, wasInserted, err := h.storage.StoreMessage(ctx, *msg)
+		if err != nil {
+			slog.Error("Failed to store message", "error", err, "message_ts", slackMsg.Timestamp)
+			continue
+		}
+
+		if wasInserted {
+			storedCount++
+		}
 	}
 
 	// Send completion message to user
-	h.sendCompletionMessage(userID, channelID, len(messages))
+	h.sendCompletionMessage(userID, channelID, storedCount, len(slackMessages))
 }
 
-
-// storeThreadDocument stores the entire thread as a single document
-func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS string, messages []slack.Message, channelID string) error {
-	if len(messages) == 0 {
-		return nil
-	}
-
-	// Build full thread content
-	var threadContent strings.Builder
-	var participants []string
-	participantSet := make(map[string]bool)
-
-	// Add each message
-	for i, msg := range messages {
-		if msg.Text == "" || msg.SubType == "bot_message" {
-			continue
-		}
-
-		// Skip messages from our own bot
-		if h.botUserID != "" && msg.User == h.botUserID {
-			continue
-		}
-
-		cleanText := h.cleanMessageText(msg.Text)
-		if strings.TrimSpace(cleanText) == "" || len(strings.TrimSpace(cleanText)) < 10 {
-			continue
-		}
-
-		// Track participants
-		if msg.User != "" && !participantSet[msg.User] {
-			participants = append(participants, msg.User)
-			participantSet[msg.User] = true
-		}
-
-		// Add message to thread content with context
-		threadContent.WriteString(fmt.Sprintf("Message %d: %s\n", i+1, cleanText))
-	}
-
-	// Create thread title from first message
-	threadTitle := "Thread"
-	if len(messages) > 0 && messages[0].Text != "" {
-		firstMessage := h.cleanMessageText(messages[0].Text)
-		if len(firstMessage) > 50 {
-			threadTitle = firstMessage[:50] + "..."
-		} else if len(firstMessage) > 0 {
-			threadTitle = firstMessage
-		}
-	}
-
-	finalContent := threadContent.String()
-	if strings.TrimSpace(finalContent) == "" {
-		return fmt.Errorf("no meaningful content in thread")
-	}
-
-	slog.Info("Storing thread document", "thread_ts", threadTS, "channel", channelID, "content_length", len(finalContent), "participants", len(participants))
-
-	document := &storage.Document{
-		ID:          fmt.Sprintf("slack_thread_%s_%s", channelID, threadTS),
-		Content:     finalContent,
-		Source:      "slack",
-		SourceID:    threadTS, // Use thread timestamp as source ID
-		Title:       threadTitle,
-		ChannelID:   channelID,
-		UserName:    strings.Join(participants, ", "), // List all participants
-		Timestamp:   parseSlackTimestamp(threadTS),
-		ContentHash: storage.HashContent(finalContent),
-	}
-
-	return h.store.StoreDocument(ctx, document)
-}
-
-// sendCompletionMessage sends a completion notification to the user
-func (h *SlackHandler) sendCompletionMessage(userID, channelID string, totalMessages int) {
-	message := fmt.Sprintf("✅ Collected and stored %d messages from thread in knowledge base", totalMessages)
-
-	// Send ephemeral message to user
-	_, err := h.client.PostEphemeral(
-		channelID,
-		userID,
-		slack.MsgOptionText(message, false),
-	)
-	if err != nil {
-		slog.Error("Failed to send completion message", "error", err)
-	}
-}
-
-// sendProcessingError sends an error message to the user
-func (h *SlackHandler) sendProcessingError(userID, channelID string) {
-	_, err := h.client.PostEphemeral(
-		channelID,
-		userID,
-		slack.MsgOptionText("❌ Failed to process thread. Please try again.", false),
-	)
-	if err != nil {
-		slog.Error("Failed to send error message", "error", err)
-	}
-}
-
-
-func (h *SlackHandler) getThreadMessages(ctx context.Context, channel, threadTS string) ([]slack.Message, error) {
+// getThreadMessages retrieves all messages in a thread from Slack
+func (h *SlackHandler) getThreadMessages(ctx context.Context, channelID, threadTS string) ([]slack.Message, error) {
 	params := &slack.GetConversationRepliesParameters{
-		ChannelID: channel,
+		ChannelID: channelID,
 		Timestamp: threadTS,
 		Limit:     100,
 	}
@@ -296,21 +209,47 @@ func (h *SlackHandler) getThreadMessages(ctx context.Context, channel, threadTS 
 	return msgs, nil
 }
 
-func (h *SlackHandler) getChannelMessages(ctx context.Context, channel string, limit int) ([]slack.Message, error) {
-	params := &slack.GetConversationHistoryParameters{
-		ChannelID: channel,
-		Limit:     limit,
+// convertSlackMessage converts a Slack message to our internal format
+func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, threadTS string) *SlackMessage {
+	// Skip messages without text or from bots
+	if slackMsg.Text == "" || slackMsg.SubType == "bot_message" {
+		return nil
 	}
 	
-	history, err := h.client.GetConversationHistoryContext(ctx, params)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get channel messages: %w", err)
+	// Skip messages from our own bot
+	if h.botUserID != "" && slackMsg.User == h.botUserID {
+		return nil
 	}
 	
-	return history.Messages, nil
+	// Clean message text
+	cleanText := h.cleanMessageText(slackMsg.Text)
+	
+	// Skip messages that are purely mentions (empty after cleaning)
+	if strings.TrimSpace(cleanText) == "" {
+		return nil
+	}
+	
+	// Skip very short messages (not worth embedding cost)
+	if len(strings.TrimSpace(cleanText)) < 10 {
+		return nil
+	}
+	
+	// Determine if this is the thread root
+	isThreadRoot := slackMsg.Timestamp == threadTS
+	
+	return &SlackMessage{
+		ChannelID:        channelID,
+		ThreadID:         threadTS,
+		MessageTimestamp: slackMsg.Timestamp,
+		UserID:           slackMsg.User,
+		UserName:         "", // Will be populated later if needed
+		Content:          strings.TrimSpace(cleanText),
+		ClientMsgID:      slackMsg.ClientMsgID,
+		IsThreadRoot:     isThreadRoot,
+	}
 }
 
-
+// cleanMessageText removes user mentions and channel references
 func (h *SlackHandler) cleanMessageText(text string) string {
 	// Remove user mentions like <@U123456>
 	for strings.Contains(text, "<@") {
@@ -335,14 +274,34 @@ func (h *SlackHandler) cleanMessageText(text string) string {
 	return strings.TrimSpace(text)
 }
 
-
-func parseSlackTimestamp(ts string) time.Time {
-	// Slack timestamps are in format "1234567890.123456"
-	if len(ts) > 10 {
-		ts = ts[:10]
+// sendCompletionMessage sends a completion notification to the user
+func (h *SlackHandler) sendCompletionMessage(userID, channelID string, storedCount, totalCount int) {
+	var message string
+	if storedCount == totalCount {
+		message = fmt.Sprintf("✅ Stored %d messages from thread in knowledge base", storedCount)
+	} else {
+		message = fmt.Sprintf("✅ Stored %d new messages from thread (%d total messages)", storedCount, totalCount)
 	}
-	
-	var unixTime int64
-	fmt.Sscanf(ts, "%d", &unixTime)
-	return time.Unix(unixTime, 0)
+
+	// Send ephemeral message to user
+	_, err := h.client.PostEphemeral(
+		channelID,
+		userID,
+		slack.MsgOptionText(message, false),
+	)
+	if err != nil {
+		slog.Error("Failed to send completion message", "error", err)
+	}
+}
+
+// sendProcessingError sends an error message to the user
+func (h *SlackHandler) sendProcessingError(userID, channelID string) {
+	_, err := h.client.PostEphemeral(
+		channelID,
+		userID,
+		slack.MsgOptionText("❌ Failed to process thread. Please try again.", false),
+	)
+	if err != nil {
+		slog.Error("Failed to send error message", "error", err)
+	}
 }

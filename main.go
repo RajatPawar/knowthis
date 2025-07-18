@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -12,25 +13,24 @@ import (
 
 	"knowthis/internal/config"
 	"knowthis/internal/handlers"
-	"knowthis/internal/jobs"
+	"knowthis/internal/integrations/slack"
 	"knowthis/internal/logging"
 	"knowthis/internal/middleware"
 	"knowthis/internal/services"
-	"knowthis/internal/storage"
 
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	_ "github.com/lib/pq"
 )
 
 type ServiceBundle struct {
-	Store               *storage.PostgresStore
-	EmbeddingService    *services.EmbeddingService
-	RAGService          *services.RAGService
-	EmbeddingProcessor  *jobs.EmbeddingProcessor
-	SlackHandler        *handlers.SlackHandler
-	SlabHandler         *handlers.SlabHandler
-	QueryHandler        *handlers.QueryHandler
-	Config              *config.Config
+	EmbeddingService         *services.EmbeddingService
+	RAGService               *services.RAGService
+	SlackStorage             *slack.SlackStorage
+	SlackHandler             *slack.SlackHandler
+	SlackEmbeddingProcessor  *slack.EmbeddingProcessor
+	QueryHandler             *handlers.QueryHandler
+	Config                   *config.Config
 }
 
 func initializeServices() *ServiceBundle {
@@ -51,23 +51,33 @@ func initializeServices() *ServiceBundle {
 		
 		slog.Info("Initializing services...")
 		
-		// Initialize storage with retry
-		var store *storage.PostgresStore
+		// Initialize database connection for Slack storage
+		var db *sql.DB
 		for {
 			var err error
-			store, err = storage.NewPostgresStore(cfg.DatabaseURL)
+			db, err = sql.Open("postgres", cfg.DatabaseURL)
 			if err != nil {
-				slog.Error("Failed to initialize storage, retrying in 30s", "error", err)
+				slog.Error("Failed to open database connection, retrying in 30s", "error", err)
 				time.Sleep(30 * time.Second)
-				// Reload configuration on retry
-				cfg = config.Load()
-				if err := cfg.Validate(); err != nil {
-					slog.Error("Invalid configuration on retry", "error", err)
-					time.Sleep(30 * time.Second)
-					continue
-				}
 				continue
 			}
+			
+			// Test connection
+			if err = db.Ping(); err != nil {
+				slog.Error("Failed to ping database, retrying in 30s", "error", err)
+				db.Close()
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			
+			// Create vector extension
+			if _, err = db.Exec("CREATE EXTENSION IF NOT EXISTS vector;"); err != nil {
+				slog.Error("Failed to create vector extension, retrying in 30s", "error", err)
+				db.Close()
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			
 			break
 		}
 		
@@ -90,10 +100,39 @@ func initializeServices() *ServiceBundle {
 			break
 		}
 		
+		// Initialize Slack storage and handler
+		var slackStorage *slack.SlackStorage
+		var slackHandler *slack.SlackHandler
+		var slackEmbeddingProcessor *slack.EmbeddingProcessor
+		for {
+			slackStorage = slack.NewSlackStorage(db)
+			if err := slackStorage.InitSchema(); err != nil {
+				slog.Error("Failed to initialize Slack schema, retrying in 30s", "error", err)
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			
+			slackHandler = slack.NewSlackHandler(cfg.SlackBotToken, slackStorage)
+			if slackHandler == nil {
+				slog.Error("Failed to initialize Slack handler, retrying in 30s")
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			
+			slackEmbeddingProcessor = slack.NewEmbeddingProcessor(slackStorage, embeddingService)
+			if slackEmbeddingProcessor == nil {
+				slog.Error("Failed to initialize Slack embedding processor, retrying in 30s")
+				time.Sleep(30 * time.Second)
+				continue
+			}
+			
+			break
+		}
+
 		// Initialize RAG service with retry
 		var ragService *services.RAGService
 		for {
-			ragService = services.NewRAGService(cfg.OpenAIAPIKey, store, embeddingService)
+			ragService = services.NewRAGService(cfg.OpenAIAPIKey, slackStorage, embeddingService)
 			if ragService == nil {
 				slog.Error("Failed to initialize RAG service, retrying in 30s")
 				time.Sleep(30 * time.Second)
@@ -109,55 +148,7 @@ func initializeServices() *ServiceBundle {
 			break
 		}
 		
-		// Initialize background jobs with retry
-		var embeddingProcessor *jobs.EmbeddingProcessor
-		for {
-			embeddingProcessor = jobs.NewEmbeddingProcessor(store, embeddingService)
-			if embeddingProcessor == nil {
-				slog.Error("Failed to initialize embedding processor, retrying in 30s")
-				time.Sleep(30 * time.Second)
-				continue
-			}
-			break
-		}
 		
-		// Initialize Slack handler with retry
-		var slackHandler *handlers.SlackHandler
-		for {
-			slackHandler = handlers.NewSlackHandler(cfg.SlackBotToken, store, ragService)
-			if slackHandler == nil {
-				slog.Error("Failed to initialize Slack handler, retrying in 30s")
-				time.Sleep(30 * time.Second)
-				// Reload configuration on retry
-				cfg = config.Load()
-				if err := cfg.Validate(); err != nil {
-					slog.Error("Invalid configuration on retry", "error", err)
-					time.Sleep(30 * time.Second)
-					continue
-				}
-				continue
-			}
-			break
-		}
-		
-		// Initialize Slab handler with retry
-		var slabHandler *handlers.SlabHandler
-		for {
-			slabHandler = handlers.NewSlabHandler(cfg.SlabWebhookSecret, store, embeddingService)
-			if slabHandler == nil {
-				slog.Error("Failed to initialize Slab handler, retrying in 30s")
-				time.Sleep(30 * time.Second)
-				// Reload configuration on retry
-				cfg = config.Load()
-				if err := cfg.Validate(); err != nil {
-					slog.Error("Invalid configuration on retry", "error", err)
-					time.Sleep(30 * time.Second)
-					continue
-				}
-				continue
-			}
-			break
-		}
 		
 		// Initialize query handler with retry
 		var queryHandler *handlers.QueryHandler
@@ -174,14 +165,13 @@ func initializeServices() *ServiceBundle {
 		slog.Info("All services initialized successfully")
 		
 		return &ServiceBundle{
-			Store:               store,
-			EmbeddingService:    embeddingService,
-			RAGService:          ragService,
-			EmbeddingProcessor:  embeddingProcessor,
-			SlackHandler:        slackHandler,
-			SlabHandler:         slabHandler,
-			QueryHandler:        queryHandler,
-			Config:              cfg,
+			EmbeddingService:        embeddingService,
+			RAGService:              ragService,
+			SlackStorage:            slackStorage,
+			SlackHandler:            slackHandler,
+			SlackEmbeddingProcessor: slackEmbeddingProcessor,
+			QueryHandler:            queryHandler,
+			Config:                  cfg,
 		}
 	}
 }
@@ -194,14 +184,13 @@ func main() {
 	
 	// Initialize all services with retry logic (includes config validation)
 	services := initializeServices()
-	defer services.Store.Close()
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Start background jobs
-	go services.EmbeddingProcessor.Start(ctx)
+	go services.SlackEmbeddingProcessor.Start(ctx)
 	
 	// Note: Slack now uses message actions instead of Socket Mode
 	// No background goroutine needed - handled via HTTP endpoints
@@ -218,10 +207,10 @@ func main() {
 	apiRouter.Use(middleware.APIRateLimitMiddleware())
 	apiRouter.HandleFunc("/query", services.QueryHandler.HandleQuery).Methods("POST")
 	
-	// Webhook routes with rate limiting
+	// Webhook routes with rate limiting (reserved for future integrations)
 	webhookRouter := router.PathPrefix("/webhook").Subrouter()
 	webhookRouter.Use(middleware.WebhookRateLimitMiddleware())
-	webhookRouter.HandleFunc("/slab", services.SlabHandler.HandleWebhook).Methods("POST")
+	// Future integrations will be added here
 	
 	// Slack routes with rate limiting
 	slackRouter := router.PathPrefix("/slack").Subrouter()
@@ -275,8 +264,8 @@ func main() {
 	// Cancel context to stop background jobs
 	cancel()
 	
-	// Stop embedding processor
-	services.EmbeddingProcessor.Stop()
+	// Stop embedding processors
+	services.SlackEmbeddingProcessor.Stop()
 	
 	// Shutdown server with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
