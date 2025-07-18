@@ -64,10 +64,20 @@ func (h *SlackHandler) HandleMessageAction(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	slog.Info("Parsed interaction", "callback_id", interaction.CallbackID, "type", interaction.Type)
+	slog.Info("Parsed interaction", 
+		"callback_id", interaction.CallbackID, 
+		"type", interaction.Type,
+		"action_id", func() string {
+			if len(interaction.ActionCallback.BlockActions) > 0 {
+				return interaction.ActionCallback.BlockActions[0].ActionID
+			}
+			return ""
+		}())
 
-	// Handle collect_context action
-	if interaction.CallbackID == "collect_context" {
+	// Handle collect_context action (check both callback_id and action_id)
+	if interaction.CallbackID == "collect_context" || 
+		(len(interaction.ActionCallback.BlockActions) > 0 && 
+		 interaction.ActionCallback.BlockActions[0].ActionID == "collect_context") {
 		slog.Info("Processing collect_context action")
 		
 		// Check if the action was triggered on a bot message
@@ -168,26 +178,52 @@ func (h *SlackHandler) handleCollectContext(interaction slack.InteractionCallbac
 		return
 	}
 
+	slog.Info("Retrieved thread messages", 
+		"count", len(slackMessages),
+		"channel", channelID,
+		"thread_ts", threadTS)
+
 	// Convert and store messages
 	storedCount := 0
-	for _, slackMsg := range slackMessages {
+	processedCount := 0
+	for i, slackMsg := range slackMessages {
+		processedCount++
+		slog.Info("Processing message", 
+			"index", i,
+			"timestamp", slackMsg.Timestamp,
+			"user", slackMsg.User,
+			"text_length", len(slackMsg.Text),
+			"is_root", slackMsg.Timestamp == threadTS)
+		
 		// Convert Slack message to our format
 		msg := h.convertSlackMessage(slackMsg, channelID, threadTS)
 		if msg == nil {
+			slog.Info("Message skipped during conversion", "timestamp", slackMsg.Timestamp)
 			continue // Skip invalid messages
 		}
 
 		// Store message
-		_, wasInserted, err := h.storage.StoreMessage(ctx, *msg)
+		stored, wasInserted, err := h.storage.StoreMessage(ctx, *msg)
 		if err != nil {
 			slog.Error("Failed to store message", "error", err, "message_ts", slackMsg.Timestamp)
 			continue
 		}
 
+		slog.Info("Message stored", 
+			"timestamp", msg.MessageTimestamp,
+			"was_inserted", wasInserted,
+			"stored_id", stored.ID,
+			"user_name", stored.UserName)
+
 		if wasInserted {
 			storedCount++
 		}
 	}
+
+	slog.Info("Processing complete", 
+		"processed", processedCount,
+		"stored", storedCount,
+		"total_retrieved", len(slackMessages))
 
 	// Send completion message to user
 	h.sendCompletionMessage(userID, channelID, storedCount, len(slackMessages))
@@ -212,36 +248,56 @@ func (h *SlackHandler) getThreadMessages(ctx context.Context, channelID, threadT
 
 // convertSlackMessage converts a Slack message to our internal format
 func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, threadTS string) *SlackMessage {
+	slog.Debug("Converting Slack message", 
+		"timestamp", slackMsg.Timestamp,
+		"user", slackMsg.User,
+		"text", slackMsg.Text,
+		"subtype", slackMsg.SubType,
+		"thread_ts", threadTS,
+		"bot_id", slackMsg.BotID)
+	
 	// Skip messages without text or from bots
-	if slackMsg.Text == "" || slackMsg.SubType == "bot_message" {
+	if slackMsg.Text == "" {
+		slog.Debug("Skipping message: no text", "timestamp", slackMsg.Timestamp)
+		return nil
+	}
+	
+	if slackMsg.SubType == "bot_message" {
+		slog.Debug("Skipping message: bot message", "timestamp", slackMsg.Timestamp)
 		return nil
 	}
 	
 	// Skip messages from our own bot
 	if h.botUserID != "" && slackMsg.User == h.botUserID {
+		slog.Debug("Skipping message: from our bot", "timestamp", slackMsg.Timestamp)
 		return nil
 	}
 	
 	// Clean message text
 	cleanText := h.cleanMessageText(slackMsg.Text)
+	slog.Debug("Cleaned text", "original", slackMsg.Text, "cleaned", cleanText)
 	
 	// Skip messages that are purely mentions (empty after cleaning)
 	if strings.TrimSpace(cleanText) == "" {
+		slog.Debug("Skipping message: empty after cleaning", "timestamp", slackMsg.Timestamp)
 		return nil
 	}
 	
 	// Skip very short messages (not worth embedding cost)
 	if len(strings.TrimSpace(cleanText)) < 10 {
+		slog.Debug("Skipping message: too short", "timestamp", slackMsg.Timestamp, "length", len(strings.TrimSpace(cleanText)))
 		return nil
 	}
 	
 	// Get user display name
 	userName := h.getUserDisplayName(slackMsg.User)
+	slog.Debug("Got user display name", "user_id", slackMsg.User, "user_name", userName)
 	
 	// Determine if this is the thread root
 	isThreadRoot := slackMsg.Timestamp == threadTS
+	slog.Debug("Thread root check", "msg_timestamp", slackMsg.Timestamp, "thread_ts", threadTS, "is_root", isThreadRoot)
 	
-	return &SlackMessage{
+	msg := &SlackMessage{
 		ChannelID:        channelID,
 		ThreadID:         threadTS,
 		MessageTimestamp: slackMsg.Timestamp,
@@ -251,6 +307,14 @@ func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, th
 		ClientMsgID:      slackMsg.ClientMsgID,
 		IsThreadRoot:     isThreadRoot,
 	}
+	
+	slog.Info("Successfully converted message", 
+		"timestamp", msg.MessageTimestamp,
+		"user_name", msg.UserName,
+		"content_length", len(msg.Content),
+		"is_thread_root", msg.IsThreadRoot)
+	
+	return msg
 }
 
 // getUserDisplayName gets the display name for a user ID
