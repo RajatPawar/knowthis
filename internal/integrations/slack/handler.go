@@ -199,6 +199,7 @@ func (h *SlackHandler) getThreadMessages(ctx context.Context, channelID, threadT
 		ChannelID: channelID,
 		Timestamp: threadTS,
 		Limit:     100,
+		Inclusive: true, // Include the parent message (thread root)
 	}
 	
 	msgs, _, _, err := h.client.GetConversationRepliesContext(ctx, params)
@@ -234,6 +235,9 @@ func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, th
 		return nil
 	}
 	
+	// Get user display name
+	userName := h.getUserDisplayName(slackMsg.User)
+	
 	// Determine if this is the thread root
 	isThreadRoot := slackMsg.Timestamp == threadTS
 	
@@ -242,11 +246,40 @@ func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, th
 		ThreadID:         threadTS,
 		MessageTimestamp: slackMsg.Timestamp,
 		UserID:           slackMsg.User,
-		UserName:         "", // Will be populated later if needed
+		UserName:         userName,
 		Content:          strings.TrimSpace(cleanText),
 		ClientMsgID:      slackMsg.ClientMsgID,
 		IsThreadRoot:     isThreadRoot,
 	}
+}
+
+// getUserDisplayName gets the display name for a user ID
+func (h *SlackHandler) getUserDisplayName(userID string) string {
+	if userID == "" {
+		return ""
+	}
+	
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	
+	user, err := h.client.GetUserInfoContext(ctx, userID)
+	if err != nil {
+		slog.Warn("Failed to get user info", "error", err, "user_id", userID)
+		return userID // Fallback to user ID
+	}
+	
+	// Try display name first, then real name, then name
+	if user.Profile.DisplayName != "" {
+		return user.Profile.DisplayName
+	}
+	if user.Profile.RealName != "" {
+		return user.Profile.RealName
+	}
+	if user.Name != "" {
+		return user.Name
+	}
+	
+	return userID // Fallback to user ID
 }
 
 // cleanMessageText removes user mentions and channel references
