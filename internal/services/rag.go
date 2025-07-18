@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"knowthis/internal/integrations/slack"
-	
+
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -19,14 +19,14 @@ type RAGService struct {
 }
 
 type QueryResult struct {
-	Answer    string                `json:"answer"`
-	Sources   []slack.SlackMessage  `json:"sources"`
-	Query     string                `json:"query"`
+	Answer  string               `json:"answer"`
+	Sources []slack.SlackMessage `json:"sources"`
+	Query   string               `json:"query"`
 }
 
 func NewRAGService(openaiAPIKey string, slackStorage *slack.SlackStorage, embeddingService *EmbeddingService) *RAGService {
 	client := openai.NewClient(openaiAPIKey)
-	
+
 	return &RAGService{
 		openaiClient:     client,
 		slackStorage:     slackStorage,
@@ -63,23 +63,23 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 		if len(contentPreview) > 100 {
 			contentPreview = contentPreview[:100] + "..."
 		}
-		
+
 		// Calculate similarity (SearchSimilarMessages returns messages ordered by similarity)
 		similarity := calculateSimilarity(queryEmbedding, msg, i)
-		
-		slog.Info("Message similarity", 
+
+		slog.Info("Message similarity",
 			"index", i,
-			"similarity", similarity, 
+			"similarity", similarity,
 			"content", contentPreview,
 			"user", msg.UserName,
 			"id", msg.ID)
-		
+
 		if similarity > 0.75 && isQualityContent(msg.Content) {
 			relevantMessages = append(relevantMessages, msg)
 		}
 	}
 
-	slog.Info("Similarity filtering completed", 
+	slog.Info("Similarity filtering completed",
 		"total_messages", len(messages),
 		"relevant_messages", len(relevantMessages),
 		"threshold", 0.75)
@@ -121,43 +121,43 @@ func (r *RAGService) Query(ctx context.Context, query string) (*QueryResult, err
 // isQualityContent filters out low-quality content that shouldn't be in search results
 func isQualityContent(content string) bool {
 	content = strings.ToLower(strings.TrimSpace(content))
-	
+
 	// Filter out bot responses and acknowledgments
 	botPatterns := []string{
 		"got it", "i've processed", "stored the messages",
 		":+1:", "👍", "✅", "done", "processed and stored",
 	}
-	
+
 	for _, pattern := range botPatterns {
 		if strings.Contains(content, pattern) {
 			return false
 		}
 	}
-	
+
 	// Filter out test/placeholder content
 	testPatterns := []string{
-		"test", "testing", "some other content", 
+		"test", "testing", "some other content",
 		"this is my other message", "should also go in",
 		"hello world", "sample", "example",
 	}
-	
+
 	for _, pattern := range testPatterns {
 		if strings.Contains(content, pattern) {
 			return false
 		}
 	}
-	
+
 	// Require minimum meaningful length (after cleaning)
 	if len(content) < 20 {
 		return false
 	}
-	
+
 	// Require some meaningful words
 	words := strings.Fields(content)
 	if len(words) < 4 {
 		return false
 	}
-	
+
 	return true
 }
 
@@ -170,24 +170,38 @@ func calculateSimilarity(queryEmbedding []float32, msg slack.SlackMessage, index
 }
 
 func (r *RAGService) generateAnswer(ctx context.Context, query string, messages []slack.SlackMessage) (string, error) {
-	// Build context from Slack messages
+	// Build context from Slack messages, organized by thread
 	var contextParts []string
-	for i, msg := range messages {
-		similarity := calculateSimilarity([]float32{}, msg, i) // Estimate similarity
-		source := fmt.Sprintf("Slack message from %s", msg.UserName)
-		
-		contextParts = append(contextParts, fmt.Sprintf(
-			"[%d] %s (%.2f relevance):\n%s",
-			i+1, source, similarity, msg.Content,
-		))
+	threadGroups := make(map[string][]slack.SlackMessage)
+
+	// Group messages by thread
+	for _, msg := range messages {
+		threadGroups[msg.ThreadID] = append(threadGroups[msg.ThreadID], msg)
 	}
-	
-	context := strings.Join(contextParts, "\n\n")
-	
+
+	contextIndex := 1
+	for _, threadMessages := range threadGroups {
+		// Sort messages within thread by timestamp
+		// (they should already be sorted from SearchSimilarMessages)
+
+		contextParts = append(contextParts, fmt.Sprintf(
+			"[%d] Thread conversation:",
+			contextIndex))
+
+		for _, msg := range threadMessages {
+			contextParts = append(contextParts, fmt.Sprintf(
+				"  %s: %s", msg.UserName, msg.Content))
+		}
+
+		contextIndex++
+	}
+
+	context := strings.Join(contextParts, "\n")
+
 	// Create system prompt for OpenAI
-	systemPrompt := "You are a helpful assistant that answers questions based on internal company knowledge from Slack messages. Be concise and cite relevant sources by their numbers when possible."
-	
-	userPrompt := fmt.Sprintf(`Based on the following context from our internal Slack knowledge base, please answer the question. Be concise and cite relevant sources by their numbers.
+	systemPrompt := "You are a helpful assistant that answers questions based on internal company knowledge from Slack conversations. Be concise and cite relevant thread conversations by their numbers when possible."
+
+	userPrompt := fmt.Sprintf(`Based on the following context from our internal Slack knowledge base, please answer the question. Be concise and cite relevant thread conversations by their numbers.
 
 Context:
 %s
@@ -216,7 +230,7 @@ func (r *RAGService) callOpenAIAPI(ctx context.Context, systemPrompt, userPrompt
 		},
 		Temperature: 0.7,
 	})
-	
+
 	if err != nil {
 		slog.Error("Failed to call OpenAI API", "error", err)
 		return "", fmt.Errorf("failed to call OpenAI API: %w", err)

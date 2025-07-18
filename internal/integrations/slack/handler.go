@@ -283,8 +283,8 @@ func (h *SlackHandler) convertSlackMessage(slackMsg slack.Message, channelID, th
 		return nil
 	}
 	
-	// Skip very short messages (not worth embedding cost)
-	if len(strings.TrimSpace(cleanText)) < 10 {
+	// Skip very short messages (not worth embedding cost), but allow thread roots
+	if len(strings.TrimSpace(cleanText)) < 10 && slackMsg.Timestamp != threadTS {
 		slog.Debug("Skipping message: too short", "timestamp", slackMsg.Timestamp, "length", len(strings.TrimSpace(cleanText)))
 		return nil
 	}
