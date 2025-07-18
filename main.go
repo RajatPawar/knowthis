@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -226,6 +227,12 @@ func main() {
 	slackRouter := router.PathPrefix("/slack").Subrouter()
 	slackRouter.Use(middleware.WebhookRateLimitMiddleware())
 	slackRouter.HandleFunc("/actions", services.SlackHandler.HandleMessageAction).Methods("POST")
+	
+	// Test endpoint for Slack actions (for debugging)
+	slackRouter.HandleFunc("/test", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Slack actions endpoint is working"})
+	}).Methods("GET")
 	
 	// System routes
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {

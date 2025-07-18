@@ -48,22 +48,31 @@ func NewSlackHandler(botToken string, store storage.Store, ragService *services.
 
 // HandleMessageAction handles Slack message actions (interactive components)
 func (h *SlackHandler) HandleMessageAction(w http.ResponseWriter, r *http.Request) {
+	slog.Info("Received Slack message action", "method", r.Method, "url", r.URL.Path)
+
 	// Parse the interaction payload
 	payload := r.FormValue("payload")
 	if payload == "" {
+		slog.Error("Missing payload in Slack action request")
 		http.Error(w, "Missing payload", http.StatusBadRequest)
 		return
 	}
 
+	slog.Debug("Received payload", "payload", payload)
+
 	var interaction slack.InteractionCallback
 	if err := json.Unmarshal([]byte(payload), &interaction); err != nil {
-		slog.Error("Failed to parse interaction payload", "error", err)
+		slog.Error("Failed to parse interaction payload", "error", err, "payload", payload)
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
 		return
 	}
 
+	slog.Info("Parsed interaction", "callback_id", interaction.CallbackID, "type", interaction.Type)
+
 	// Handle collect_context action
 	if interaction.CallbackID == "collect_context" {
+		slog.Info("Processing collect_context action")
+		
 		// Start processing in background
 		go h.handleCollectContext(interaction)
 
@@ -71,13 +80,21 @@ func (h *SlackHandler) HandleMessageAction(w http.ResponseWriter, r *http.Reques
 		w.Header().Set("Content-Type", "application/json")
 		response := map[string]interface{}{
 			"response_type": "ephemeral",
-			"text":          "✅ Collecting thread context and generating summary...",
+			"text":          "✅ Collecting thread context for knowledge base...",
 		}
-		json.NewEncoder(w).Encode(response)
+		
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			slog.Error("Failed to encode response", "error", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+		
+		slog.Info("Sent immediate response to Slack")
 		return
 	}
 
 	// Unknown action
+	slog.Warn("Unknown action received", "callback_id", interaction.CallbackID)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -110,16 +127,8 @@ func (h *SlackHandler) handleCollectContext(interaction slack.InteractionCallbac
 		return
 	}
 
-	// Generate thread summary
-	threadSummary, err := h.generateThreadSummary(ctx, messages)
-	if err != nil {
-		slog.Error("Failed to generate thread summary", "error", err)
-		// Continue without summary
-		threadSummary = "Summary unavailable"
-	}
-
-	// Store thread as single document with summary
-	if err := h.storeThreadDocument(ctx, threadTS, threadSummary, messages, channelID); err != nil {
+	// Store thread as single document
+	if err := h.storeThreadDocument(ctx, threadTS, messages, channelID); err != nil {
 		slog.Error("Failed to store thread document", "error", err)
 		h.sendProcessingError(userID, channelID)
 		return
@@ -129,49 +138,9 @@ func (h *SlackHandler) handleCollectContext(interaction slack.InteractionCallbac
 	h.sendCompletionMessage(userID, channelID, len(messages))
 }
 
-// generateThreadSummary creates an AI-generated summary of the thread
-func (h *SlackHandler) generateThreadSummary(ctx context.Context, messages []slack.Message) (string, error) {
-	if len(messages) == 0 {
-		return "Empty thread", nil
-	}
-
-	// Build thread context
-	var threadContent strings.Builder
-	for i, msg := range messages {
-		if msg.Text == "" || msg.SubType == "bot_message" {
-			continue
-		}
-
-		cleanText := h.cleanMessageText(msg.Text)
-		if strings.TrimSpace(cleanText) == "" {
-			continue
-		}
-
-		threadContent.WriteString(fmt.Sprintf("Message %d: %s\n", i+1, cleanText))
-	}
-
-	if threadContent.Len() == 0 {
-		return "No meaningful content in thread", nil
-	}
-
-	// Generate summary using RAG service
-	prompt := fmt.Sprintf(`Summarize this Slack thread conversation in 2-3 sentences. Focus on the main topic, key decisions, and important outcomes. Be concise but informative.
-
-Thread content:
-%s`, threadContent.String())
-
-	// Use a simple query to the RAG service for summarization
-	// Note: This is a simplified approach - in production you might want a dedicated summarization endpoint
-	result, err := h.ragService.Query(ctx, prompt)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate summary: %w", err)
-	}
-
-	return result.Answer, nil
-}
 
 // storeThreadDocument stores the entire thread as a single document
-func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summary string, messages []slack.Message, channelID string) error {
+func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS string, messages []slack.Message, channelID string) error {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -180,9 +149,6 @@ func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summar
 	var threadContent strings.Builder
 	var participants []string
 	participantSet := make(map[string]bool)
-
-	// Add summary at the top
-	threadContent.WriteString(fmt.Sprintf("Thread Summary: %s\n\n", summary))
 
 	// Add each message
 	for i, msg := range messages {
@@ -206,7 +172,7 @@ func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summar
 			participantSet[msg.User] = true
 		}
 
-		// Add message to thread content
+		// Add message to thread content with context
 		threadContent.WriteString(fmt.Sprintf("Message %d: %s\n", i+1, cleanText))
 	}
 
@@ -226,6 +192,8 @@ func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summar
 		return fmt.Errorf("no meaningful content in thread")
 	}
 
+	slog.Info("Storing thread document", "thread_ts", threadTS, "channel", channelID, "content_length", len(finalContent), "participants", len(participants))
+
 	document := &storage.Document{
 		ID:          fmt.Sprintf("slack_thread_%s_%s", channelID, threadTS),
 		Content:     finalContent,
@@ -243,7 +211,7 @@ func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summar
 
 // sendCompletionMessage sends a completion notification to the user
 func (h *SlackHandler) sendCompletionMessage(userID, channelID string, totalMessages int) {
-	message := fmt.Sprintf("✅ Processed %d messages from thread and generated summary", totalMessages)
+	message := fmt.Sprintf("✅ Collected and stored %d messages from thread in knowledge base", totalMessages)
 
 	// Send ephemeral message to user
 	_, err := h.client.PostEphemeral(
