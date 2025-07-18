@@ -9,7 +9,7 @@ KnowThis is a Go-based internal knowledge & search MVP bot that integrates with 
 ## Architecture
 
 ### Core Components
-- **Slack Integration**: Socket Mode for real-time event processing
+- **Slack Integration**: Message actions for thread context collection
 - **Slab Integration**: Webhook endpoint with HMAC verification
 - **Storage Layer**: PostgreSQL with pgvector for embeddings
 - **Embeddings**: OpenAI text-embedding-3-small
@@ -57,22 +57,29 @@ psql knowthis -c "CREATE EXTENSION vector;"
 
 Required environment variables:
 - `SLACK_BOT_TOKEN`: Slack bot token (xoxb-)
-- `SLACK_APP_TOKEN`: Slack app token (xapp-)
 - `SLAB_WEBHOOK_SECRET`: Secret for HMAC verification
 - `OPENAI_API_KEY`: OpenAI API key for embeddings and chat completions
 - `DATABASE_URL`: PostgreSQL connection string (defaults to localhost)
 - `PORT`: HTTP server port (defaults to 8080)
+- `LOG_LEVEL`: Logging level (DEBUG, INFO, WARN, ERROR)
+- `LOG_FORMAT`: Logging format (text, json)
+- `ENVIRONMENT`: Application environment (production, development)
 
 ## Slack Bot Setup
 
 Required OAuth scopes:
-- `app_mentions:read` - detect mentions
+- `commands` - for message actions
+- `chat:write` - for ephemeral responses
 - `channels:history` - read channel messages
 - `groups:history` - read private channel messages
 - `im:history` - read DM history
 - `mpim:history` - read group DM history
 
 ## API Endpoints
+
+### Slack Actions
+- `POST /slack/actions` - Handles Slack message actions
+- Supported actions: `collect_context` (collects thread context and generates summary)
 
 ### Slab Webhook
 - `POST /webhook/slab` - Handles Slab events with HMAC verification
@@ -85,6 +92,8 @@ Required OAuth scopes:
 
 ### Health Check
 - `GET /health` - Returns 200 OK
+- `GET /ready` - Returns 200 OK (readiness check)
+- `GET /metrics` - Prometheus metrics endpoint
 
 ## Storage Schema
 
@@ -118,8 +127,10 @@ Required OAuth scopes:
 ## Development Notes
 
 ### Slack Integration
-- Uses Socket Mode for real-time events
-- Processes app mentions and fetches conversation history
+- Uses message actions for thread context collection
+- Processes "Collect Context" action to gather thread messages
+- Generates AI summaries for each thread
+- Provides ephemeral feedback to users
 - Cleans message text by removing user/channel mentions
 
 ### Slab Integration

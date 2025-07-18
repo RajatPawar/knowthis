@@ -10,7 +10,6 @@ type Config struct {
 	Port              string
 	DatabaseURL       string
 	SlackBotToken     string
-	SlackAppToken     string
 	SlabWebhookSecret string
 	OpenAIAPIKey      string
 	LogLevel          string
@@ -23,7 +22,6 @@ func Load() *Config {
 		Port:              os.Getenv("PORT"),
 		DatabaseURL:       os.Getenv("DATABASE_URL"),
 		SlackBotToken:     os.Getenv("SLACK_BOT_TOKEN"),
-		SlackAppToken:     os.Getenv("SLACK_APP_TOKEN"),
 		SlabWebhookSecret: os.Getenv("SLAB_WEBHOOK_SECRET"),
 		OpenAIAPIKey:      os.Getenv("OPENAI_API_KEY"),
 		LogLevel:          os.Getenv("LOG_LEVEL"),
@@ -43,9 +41,6 @@ func (c *Config) Validate() error {
 		errors = append(errors, "SLACK_BOT_TOKEN is required")
 	}
 
-	if c.SlackAppToken == "" {
-		errors = append(errors, "SLACK_APP_TOKEN is required")
-	}
 
 	if c.OpenAIAPIKey == "" {
 		errors = append(errors, "OPENAI_API_KEY is required")
@@ -72,9 +67,6 @@ func (c *Config) Validate() error {
 		errors = append(errors, "SLACK_BOT_TOKEN must start with 'xoxb-'")
 	}
 
-	if c.SlackAppToken != "" && !strings.HasPrefix(c.SlackAppToken, "xapp-") {
-		errors = append(errors, "SLACK_APP_TOKEN must start with 'xapp-'")
-	}
 
 	if c.LogLevel != "" {
 		validLogLevels := []string{"DEBUG", "INFO", "WARN", "ERROR"}

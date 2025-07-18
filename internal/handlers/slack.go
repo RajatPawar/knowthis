@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -11,24 +13,17 @@ import (
 	"knowthis/internal/storage"
 
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/slackevents"
-	"github.com/slack-go/slack/socketmode"
 )
 
 type SlackHandler struct {
 	client     *slack.Client
-	socketMode *socketmode.Client
 	store      storage.Store
 	ragService *services.RAGService
 	botUserID  string
 }
 
-func NewSlackHandler(botToken, appToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
-	client := slack.New(
-		botToken,
-		slack.OptionAppLevelToken(appToken),
-	)
-	socketMode := socketmode.New(client)
+func NewSlackHandler(botToken string, store storage.Store, ragService *services.RAGService) *SlackHandler {
+	client := slack.New(botToken)
 	
 	// Get bot user ID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -37,120 +32,242 @@ func NewSlackHandler(botToken, appToken string, store storage.Store, ragService 
 	authTest, err := client.AuthTestContext(ctx)
 	var botUserID string
 	if err != nil {
-		log.Printf("Warning: Could not get bot user ID: %v", err)
+		slog.Warn("Could not get bot user ID", "error", err)
 	} else {
 		botUserID = authTest.UserID
-		log.Printf("Bot user ID: %s", botUserID)
+		slog.Info("Bot user ID retrieved", "bot_user_id", botUserID)
 	}
 	
 	return &SlackHandler{
 		client:     client,
-		socketMode: socketMode,
 		store:      store,
 		ragService: ragService,
 		botUserID:  botUserID,
 	}
 }
 
-func (h *SlackHandler) Start() error {
-	go h.handleEvents()
-	return h.socketMode.Run()
-}
-
-func (h *SlackHandler) handleEvents() {
-	for evt := range h.socketMode.Events {
-		switch evt.Type {
-		case socketmode.EventTypeEventsAPI:
-			// Handle events API
-			eventsAPIEvent, ok := evt.Data.(slackevents.EventsAPIEvent)
-			if !ok {
-				log.Printf("Ignored %+v\n", evt)
-				continue
-			}
-			
-			log.Printf("Event received: %+v\n", eventsAPIEvent)
-			h.socketMode.Ack(*evt.Request)
-			
-			switch eventsAPIEvent.Type {
-			case slackevents.CallbackEvent:
-				innerEvent := eventsAPIEvent.InnerEvent
-				switch ev := innerEvent.Data.(type) {
-				case *slackevents.AppMentionEvent:
-					h.handleAppMention(ev)
-				}
-			}
-		}
-	}
-}
-
-func (h *SlackHandler) handleAppMention(ev *slackevents.AppMentionEvent) {
-	log.Printf("App mention received: %+v\n", ev)
-	
-	mention := &AppMentionEvent{
-		Type:            ev.Type,
-		User:            ev.User,
-		Text:            ev.Text,
-		Timestamp:       ev.TimeStamp,
-		Channel:         ev.Channel,
-		ThreadTimeStamp: ev.ThreadTimeStamp,
-	}
-
-	go h.processAppMention(mention)
-}
-
-// Helper struct for app mention event
-type AppMentionEvent struct {
-	Type            string
-	User            string
-	Text            string
-	Timestamp       string
-	Channel         string
-	ThreadTimeStamp string
-}
-
-
-func (h *SlackHandler) processAppMention(mention *AppMentionEvent) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	// Check if this is a thread
-	var messages []slack.Message
-	var err error
-	
-	if mention.ThreadTimeStamp != "" {
-		log.Printf("Processing thread mention - ThreadTS: %s", mention.ThreadTimeStamp)
-		// Get thread messages
-		messages, err = h.getThreadMessages(ctx, mention.Channel, mention.ThreadTimeStamp)
-	} else {
-		log.Printf("Processing channel mention - fetching last 15 messages")
-		// Get last 15 messages from channel
-		messages, err = h.getChannelMessages(ctx, mention.Channel, 15)
-	}
-	
-	if err != nil {
-		log.Printf("Error fetching messages: %v", err)
+// HandleMessageAction handles Slack message actions (interactive components)
+func (h *SlackHandler) HandleMessageAction(w http.ResponseWriter, r *http.Request) {
+	// Parse the interaction payload
+	payload := r.FormValue("payload")
+	if payload == "" {
+		http.Error(w, "Missing payload", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Fetched %d messages from thread/channel", len(messages))
+	var interaction slack.InteractionCallback
+	if err := json.Unmarshal([]byte(payload), &interaction); err != nil {
+		slog.Error("Failed to parse interaction payload", "error", err)
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
 
-	// Store messages with deduplication
-	for i, msg := range messages {
-		textPreview := msg.Text
-		if len(textPreview) > 50 {
-			textPreview = textPreview[:50] + "..."
+	// Handle collect_context action
+	if interaction.CallbackID == "collect_context" {
+		// Start processing in background
+		go h.handleCollectContext(interaction)
+
+		// Respond immediately with ephemeral message
+		w.Header().Set("Content-Type", "application/json")
+		response := map[string]interface{}{
+			"response_type": "ephemeral",
+			"text":          "✅ Collecting thread context and generating summary...",
 		}
-		log.Printf("Storing message %d: %s", i+1, textPreview)
-		if err := h.storeMessage(ctx, msg, mention.Channel); err != nil {
-			log.Printf("Error storing message: %v", err)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Unknown action
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleCollectContext processes the thread context collection
+func (h *SlackHandler) handleCollectContext(interaction slack.InteractionCallback) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	message := interaction.Message
+	channelID := interaction.Channel.ID
+	userID := interaction.User.ID
+
+	// Determine thread timestamp
+	threadTS := message.ThreadTimestamp
+	if threadTS == "" {
+		// If not in a thread, use the message timestamp as thread root
+		threadTS = message.Timestamp
+	}
+
+	slog.Info("Processing thread context collection", 
+		"channel", channelID, 
+		"thread_ts", threadTS, 
+		"user", userID)
+
+	// Get all thread messages
+	messages, err := h.getThreadMessages(ctx, channelID, threadTS)
+	if err != nil {
+		slog.Error("Failed to get thread messages", "error", err)
+		h.sendProcessingError(userID, channelID)
+		return
+	}
+
+	// Generate thread summary
+	threadSummary, err := h.generateThreadSummary(ctx, messages)
+	if err != nil {
+		slog.Error("Failed to generate thread summary", "error", err)
+		// Continue without summary
+		threadSummary = "Summary unavailable"
+	}
+
+	// Store thread as single document with summary
+	if err := h.storeThreadDocument(ctx, threadTS, threadSummary, messages, channelID); err != nil {
+		slog.Error("Failed to store thread document", "error", err)
+		h.sendProcessingError(userID, channelID)
+		return
+	}
+
+	// Send completion message to user
+	h.sendCompletionMessage(userID, channelID, len(messages))
+}
+
+// generateThreadSummary creates an AI-generated summary of the thread
+func (h *SlackHandler) generateThreadSummary(ctx context.Context, messages []slack.Message) (string, error) {
+	if len(messages) == 0 {
+		return "Empty thread", nil
+	}
+
+	// Build thread context
+	var threadContent strings.Builder
+	for i, msg := range messages {
+		if msg.Text == "" || msg.SubType == "bot_message" {
+			continue
+		}
+
+		cleanText := h.cleanMessageText(msg.Text)
+		if strings.TrimSpace(cleanText) == "" {
+			continue
+		}
+
+		threadContent.WriteString(fmt.Sprintf("Message %d: %s\n", i+1, cleanText))
+	}
+
+	if threadContent.Len() == 0 {
+		return "No meaningful content in thread", nil
+	}
+
+	// Generate summary using RAG service
+	prompt := fmt.Sprintf(`Summarize this Slack thread conversation in 2-3 sentences. Focus on the main topic, key decisions, and important outcomes. Be concise but informative.
+
+Thread content:
+%s`, threadContent.String())
+
+	// Use a simple query to the RAG service for summarization
+	// Note: This is a simplified approach - in production you might want a dedicated summarization endpoint
+	result, err := h.ragService.Query(ctx, prompt)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate summary: %w", err)
+	}
+
+	return result.Answer, nil
+}
+
+// storeThreadDocument stores the entire thread as a single document
+func (h *SlackHandler) storeThreadDocument(ctx context.Context, threadTS, summary string, messages []slack.Message, channelID string) error {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	// Build full thread content
+	var threadContent strings.Builder
+	var participants []string
+	participantSet := make(map[string]bool)
+
+	// Add summary at the top
+	threadContent.WriteString(fmt.Sprintf("Thread Summary: %s\n\n", summary))
+
+	// Add each message
+	for i, msg := range messages {
+		if msg.Text == "" || msg.SubType == "bot_message" {
+			continue
+		}
+
+		// Skip messages from our own bot
+		if h.botUserID != "" && msg.User == h.botUserID {
+			continue
+		}
+
+		cleanText := h.cleanMessageText(msg.Text)
+		if strings.TrimSpace(cleanText) == "" || len(strings.TrimSpace(cleanText)) < 10 {
+			continue
+		}
+
+		// Track participants
+		if msg.User != "" && !participantSet[msg.User] {
+			participants = append(participants, msg.User)
+			participantSet[msg.User] = true
+		}
+
+		// Add message to thread content
+		threadContent.WriteString(fmt.Sprintf("Message %d: %s\n", i+1, cleanText))
+	}
+
+	// Create thread title from first message
+	threadTitle := "Thread"
+	if len(messages) > 0 && messages[0].Text != "" {
+		firstMessage := h.cleanMessageText(messages[0].Text)
+		if len(firstMessage) > 50 {
+			threadTitle = firstMessage[:50] + "..."
+		} else if len(firstMessage) > 0 {
+			threadTitle = firstMessage
 		}
 	}
 
-	// Add checkmark reaction to acknowledge
-	if err := h.addCheckmarkReaction(mention.Channel, mention.Timestamp); err != nil {
-		log.Printf("Error adding checkmark reaction: %v", err)
+	finalContent := threadContent.String()
+	if strings.TrimSpace(finalContent) == "" {
+		return fmt.Errorf("no meaningful content in thread")
+	}
+
+	document := &storage.Document{
+		ID:          fmt.Sprintf("slack_thread_%s_%s", channelID, threadTS),
+		Content:     finalContent,
+		Source:      "slack",
+		SourceID:    threadTS, // Use thread timestamp as source ID
+		Title:       threadTitle,
+		ChannelID:   channelID,
+		UserName:    strings.Join(participants, ", "), // List all participants
+		Timestamp:   parseSlackTimestamp(threadTS),
+		ContentHash: storage.HashContent(finalContent),
+	}
+
+	return h.store.StoreDocument(ctx, document)
+}
+
+// sendCompletionMessage sends a completion notification to the user
+func (h *SlackHandler) sendCompletionMessage(userID, channelID string, totalMessages int) {
+	message := fmt.Sprintf("✅ Processed %d messages from thread and generated summary", totalMessages)
+
+	// Send ephemeral message to user
+	_, err := h.client.PostEphemeral(
+		channelID,
+		userID,
+		slack.MsgOptionText(message, false),
+	)
+	if err != nil {
+		slog.Error("Failed to send completion message", "error", err)
 	}
 }
+
+// sendProcessingError sends an error message to the user
+func (h *SlackHandler) sendProcessingError(userID, channelID string) {
+	_, err := h.client.PostEphemeral(
+		channelID,
+		userID,
+		slack.MsgOptionText("❌ Failed to process thread. Please try again.", false),
+	)
+	if err != nil {
+		slog.Error("Failed to send error message", "error", err)
+	}
+}
+
 
 func (h *SlackHandler) getThreadMessages(ctx context.Context, channel, threadTS string) ([]slack.Message, error) {
 	params := &slack.GetConversationRepliesParameters{
@@ -181,53 +298,6 @@ func (h *SlackHandler) getChannelMessages(ctx context.Context, channel string, l
 	return history.Messages, nil
 }
 
-func (h *SlackHandler) storeMessage(ctx context.Context, msg slack.Message, channel string) error {
-	// Skip messages without text or from bots
-	if msg.Text == "" || msg.SubType == "bot_message" {
-		return nil
-	}
-	
-	// Skip messages from our own bot
-	if h.botUserID != "" && msg.User == h.botUserID {
-		log.Printf("Skipping message from bot user: %s", msg.User)
-		return nil
-	}
-	
-	// Clean text - remove user mentions and channel references
-	cleanText := h.cleanMessageText(msg.Text)
-	
-	// Skip messages that are purely mentions (empty after cleaning)
-	if strings.TrimSpace(cleanText) == "" {
-		log.Printf("Skipping message that contains only mentions/references")
-		return nil
-	}
-	
-	// Skip very short messages (not worth embedding cost)
-	if len(strings.TrimSpace(cleanText)) < 10 {
-		log.Printf("Skipping very short message: %s", cleanText)
-		return nil
-	}
-	
-	// Final validation - ensure content is not empty after all processing
-	finalContent := strings.TrimSpace(cleanText)
-	if finalContent == "" {
-		log.Printf("Skipping message with empty final content")
-		return nil
-	}
-	
-	document := &storage.Document{
-		ID:          fmt.Sprintf("slack_%s_%s", channel, msg.Timestamp),
-		Content:     finalContent,
-		Source:      "slack",
-		SourceID:    msg.Timestamp,
-		ChannelID:   channel,
-		UserID:      msg.User,
-		Timestamp:   parseSlackTimestamp(msg.Timestamp),
-		ContentHash: storage.HashContent(finalContent),
-	}
-	
-	return h.store.StoreDocument(ctx, document)
-}
 
 func (h *SlackHandler) cleanMessageText(text string) string {
 	// Remove user mentions like <@U123456>
@@ -253,12 +323,6 @@ func (h *SlackHandler) cleanMessageText(text string) string {
 	return strings.TrimSpace(text)
 }
 
-func (h *SlackHandler) addCheckmarkReaction(channel, timestamp string) error {
-	return h.client.AddReaction("white_check_mark", slack.ItemRef{
-		Channel:   channel,
-		Timestamp: timestamp,
-	})
-}
 
 func parseSlackTimestamp(ts string) time.Time {
 	// Slack timestamps are in format "1234567890.123456"

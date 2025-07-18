@@ -9,7 +9,7 @@ type Document struct {
 	ID          string    `json:"id"`
 	Content     string    `json:"content"`
 	Source      string    `json:"source"`      // "slack" or "slab"
-	SourceID    string    `json:"source_id"`   // Original ID from source
+	SourceID    string    `json:"source_id"`   // Original ID from source (thread_ts for Slack threads)
 	Title       string    `json:"title,omitempty"`
 	ChannelID   string    `json:"channel_id,omitempty"`  // For Slack
 	PostID      string    `json:"post_id,omitempty"`     // For Slab comments

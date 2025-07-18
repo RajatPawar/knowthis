@@ -123,7 +123,7 @@ func initializeServices() *ServiceBundle {
 		// Initialize Slack handler with retry
 		var slackHandler *handlers.SlackHandler
 		for {
-			slackHandler = handlers.NewSlackHandler(cfg.SlackBotToken, cfg.SlackAppToken, store, ragService)
+			slackHandler = handlers.NewSlackHandler(cfg.SlackBotToken, store, ragService)
 			if slackHandler == nil {
 				slog.Error("Failed to initialize Slack handler, retrying in 30s")
 				time.Sleep(30 * time.Second)
@@ -202,20 +202,8 @@ func main() {
 	// Start background jobs
 	go services.EmbeddingProcessor.Start(ctx)
 	
-	// Start Slack Socket Mode in goroutine with retry logic
-	go func() {
-		for {
-			if err := services.SlackHandler.Start(); err != nil {
-				slog.Error("Failed to start Slack handler, retrying in 30s", "error", err)
-				time.Sleep(30 * time.Second)
-				
-				// Reinitialize services with new config on auth failure
-				services = initializeServices()
-				continue
-			}
-			break
-		}
-	}()
+	// Note: Slack now uses message actions instead of Socket Mode
+	// No background goroutine needed - handled via HTTP endpoints
 
 	// Setup HTTP server with middleware
 	router := mux.NewRouter()
@@ -233,6 +221,11 @@ func main() {
 	webhookRouter := router.PathPrefix("/webhook").Subrouter()
 	webhookRouter.Use(middleware.WebhookRateLimitMiddleware())
 	webhookRouter.HandleFunc("/slab", services.SlabHandler.HandleWebhook).Methods("POST")
+	
+	// Slack routes with rate limiting
+	slackRouter := router.PathPrefix("/slack").Subrouter()
+	slackRouter.Use(middleware.WebhookRateLimitMiddleware())
+	slackRouter.HandleFunc("/actions", services.SlackHandler.HandleMessageAction).Methods("POST")
 	
 	// System routes
 	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
