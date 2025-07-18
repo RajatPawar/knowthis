@@ -216,10 +216,11 @@ func (s *SlackStorage) GetThreadRoot(ctx context.Context, threadID string) (*Sla
 // GetThreadsWithoutEmbeddings retrieves threads that need embeddings
 func (s *SlackStorage) GetThreadsWithoutEmbeddings(ctx context.Context, limit int) ([]string, error) {
 	query := `
-		SELECT DISTINCT m.thread_id
+		SELECT m.thread_id
 		FROM slack_messages m
 		LEFT JOIN slack_thread_embeddings e ON m.thread_id = e.thread_id
 		WHERE e.thread_id IS NULL
+		GROUP BY m.thread_id
 		ORDER BY MIN(m.created_at) ASC
 		LIMIT $1
 	`
